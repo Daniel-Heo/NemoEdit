@@ -27,48 +27,5 @@ Dual License
 1. If you are not a citizen of the Republic of Korea: AGPL 3.0 License
 2. If you are a citizen of the Republic of Korea: MIT License
    
-# 다른 오픈소스 에디터와 비교
-
-## Scintilla 비교
-Scintilla는 널리 사용되는 오픈소스 에디팅 컴포넌트입니다.
-
-장점 대비:
-
-- Scintilla는 다양한 언어와 플랫폼 지원
-- 구문 강조, 코드 접기, 자동 완성 등 고급 기능 제공
-- 더 폭넓은 커뮤니티와 확장 기능
-
-단점 대비:
-
-- 네모에디터는 한글 입력에 더 최적화됨
-- 네모에디터는 더 단순한 구조로 필요한 기능만 포함
-- 네모에디터는 Rope 자료구조로 대용량 텍스트 처리에 효율적
-
-## Qt의 QTextEdit 비교
-
-장점 대비:
-
-- QTextEdit는 크로스 플랫폼 지원
-- QTextEdit는 더 풍부한 텍스트 서식 지원
-- Qt 프레임워크의 다양한 기능 활용 가능
-
-단점 대비:
-
-- 네모에디터는 MFC 전용 애플리케이션에 더 쉽게 통합
-- 네모에디터는 더 경량화된 구조
-- 한글 특화 기능이 더 잘 구현됨
-
-## CEdit(Windows 기본 컨트롤) 비교
-
-장점 대비:
-
-- 네모에디터가 대용량 텍스트 처리에 훨씬 우수함
-- 네모에디터는 더 많은 기능 제공(워드랩, 라인 번호 등)
-- 더 세밀한 렌더링 제어와 성능 최적화
-
-단점 대비:
-
-- CEdit는 더 가벼움
-- CEdit는 Windows API에 더 기본적으로 통합됨
 
 
