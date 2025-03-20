@@ -1,5 +1,6 @@
 # 네모에디터(NemoEdit)의 특징
 네모에디터는 Windows 환경에서 한글 지원과 대용량 텍스트 처리에 중점을 둔 특화된 에디터입니다. 고급 기능보다는 성능과 한글 입력에 최적화되어 있으며, MFC 기반 애플리케이션에 쉽게 통합할 수 있습니다. 다른 범용 에디터 컴포넌트들에 비해 기능은 제한적이지만, 특정 요구사항(한글 지원, 대용량 처리)에 맞게 최적화되어 있습니다.
+
 ## 장점
 
 - 한글 지원에 최적화: 코드에서 명시된 것처럼 한글 지원에 중점을 둔 에디터
@@ -17,6 +18,15 @@
 - 확장성 제약: 플러그인 시스템이 없어 확장이 제한적
 - 리소스 사용: MFC 사용으로 인한 추가 리소스 요구
 
+# 라이센스 ( License )
+듀얼 라이센스
+1. 대한민국 시민권자가 아닌 경우 : AGPL 3.0 License
+2. 대한민국 시민권자인 경우 : MIT License
+
+Dual License
+1. If you are not a citizen of the Republic of Korea: AGPL 3.0 License
+2. If you are a citizen of the Republic of Korea: MIT License
+   
 # 다른 오픈소스 에디터와 비교
 
 ## Scintilla 비교
