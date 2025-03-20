@@ -21,41 +21,41 @@
 # 사용법
 
 ```
-   #include "NemoEdit.h"
+#include "NemoEdit.h"
 
-   OnCreate에 아래 내용을 넣는다.
-   // ------------------------
-	// NemoEdit 컨트롤 생성
-	CRect editRect(10, 10, 500, 400);  // 크기 설정
-	m_editCtrl.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, editRect, this, 1001);
+OnCreate에 아래 내용을 넣는다.
+// ------------------------
+// NemoEdit 컨트롤 생성
+CRect editRect(10, 10, 500, 400);  // 크기 설정
+m_editCtrl.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, editRect, this, 1001);
 
-	// 기본 텍스트 설정
-	std::wstring text = L"이것은 NemoEdit의 예제입니다.\nMFC 기반의 텍스트 에디터 컨트롤입니다.\n";
-	m_editCtrl.SetText(text);
+// 기본 텍스트 설정
+std::wstring text = L"이것은 NemoEdit의 예제입니다.\nMFC 기반의 텍스트 에디터 컨트롤입니다.\n";
+m_editCtrl.SetText(text);
 
-	// 에디터 텍스트 가져오기
-	text = m_editCtrl.GetText();
+// 에디터 텍스트 가져오기
+text = m_editCtrl.GetText();
 
-	// 폰트 설정
-	m_editCtrl.SetFont(L"Noto Sans Kr", 15, true, false); // 글꼴, 크기, 볼드, 이탤릭
-	// 라인 여백 설정
-	m_editCtrl.SetLineSpacing(5); // 5픽셀 추가 여백
-	// 워드랩 설정
-	m_editCtrl.SetWordWrap(true);
-	// 라인 번호 표시
-	m_editCtrl.ShowLineNumbers(true);
-	// 읽기 전용 설정
-	m_editCtrl.SetReadOnly(true);
-	// 여백 설정
-	m_editCtrl.SetMargin(5, 20, 5, 0); // 왼쪽, 오른쪽, 위, 아래 ( 오른쪽은 한글 입력 IME때문에 크게 잡음, 아래는 미구현 )
-	// 텍스트 색상 설정
-	m_editCtrl.SetTextColor(RGB(180, 180, 200), RGB(28, 29, 22)); // 텍스트 색상, 배경색
-	// 라인 번호 색상 설정
-	m_editCtrl.SetLineNumColor(RGB(140, 140, 140), RGB(28, 29, 22)); // 라인 번호 색상, 배경색
-	// 스크롤바 컨트롤 사용
-	m_editCtrl.ActiveScrollCtrl(true); // false일 경우에 스크롤바 컨트롤 사용 안함
-	// 스크롤바 표시 설정
-	m_editCtrl.SetScrollCtrl(false); // false일 경우에 스크롤바 표시 안함
+// 폰트 설정
+m_editCtrl.SetFont(L"Noto Sans Kr", 15, true, false); // 글꼴, 크기, 볼드, 이탤릭
+// 라인 여백 설정
+m_editCtrl.SetLineSpacing(5); // 5픽셀 추가 여백
+// 워드랩 설정
+m_editCtrl.SetWordWrap(true);
+// 라인 번호 표시
+m_editCtrl.ShowLineNumbers(true);
+// 읽기 전용 설정
+m_editCtrl.SetReadOnly(true);
+// 여백 설정
+m_editCtrl.SetMargin(5, 20, 5, 0); // 왼쪽, 오른쪽, 위, 아래 ( 오른쪽은 한글 입력 IME때문에 크게 잡음, 아래는 미구현 )
+// 텍스트 색상 설정
+m_editCtrl.SetTextColor(RGB(180, 180, 200), RGB(28, 29, 22)); // 텍스트 색상, 배경색
+// 라인 번호 색상 설정
+m_editCtrl.SetLineNumColor(RGB(140, 140, 140), RGB(28, 29, 22)); // 라인 번호 색상, 배경색
+// 스크롤바 컨트롤 사용
+m_editCtrl.ActiveScrollCtrl(true); // false일 경우에 스크롤바 컨트롤 사용 안함
+// 스크롤바 표시 설정
+m_editCtrl.SetScrollCtrl(false); // false일 경우에 스크롤바 표시 안함
 ```
 
 # 라이센스 ( License )
