@@ -19,7 +19,7 @@
 - 리소스 사용: MFC 사용으로 인한 추가 리소스 요구
 
 # 사용법
-
+NemoEdit.h, NemoEdit.cpp파일을 프로젝트에 추가하고 아래 내용대로 설정한다.
 ```
 #include "NemoEdit.h"
 
