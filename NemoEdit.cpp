@@ -454,7 +454,8 @@ void NemoEdit::AddText(std::wstring text) {
     }
 
     // 캐럿 위치 갱신 - 추가된 텍스트의 마지막 위치로
-    m_caretPos.lineIndex = insertIndex - 1;
+    insertIndex = m_rope.getSize() - 1;
+    m_caretPos.lineIndex = insertIndex;
     m_caretPos.column = lines.back().length();
 
     // 선택 영역 초기화
@@ -1510,7 +1511,7 @@ void NemoEdit::UpdateCaretPosition() {
 // m_warapInfo 정보를 갱신한다. ( 텍스트 변경사항 적용 )
 // WordWrapInfo 구조체에 maxWidth 필드 추가 후 EnsureCaretVisible 함수 수정
 void NemoEdit::EnsureCaretVisible() {
-    if (::GetFocus() != m_hWnd) return;
+    //if (::GetFocus() != m_hWnd) return;
     CPoint pt = GetCaretPixelPos(m_caretPos);
     CRect client;
     GetClientRect(&client);
