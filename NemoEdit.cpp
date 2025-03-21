@@ -1519,6 +1519,10 @@ void NemoEdit::EnsureCaretVisible() {
             inc = pt.y + m_lineHeight - (int)(client.Height() / m_lineHeight) * m_lineHeight;
             pt.y -= m_lineHeight;
         }
+	else {
+	    // 화면에 보이는 라인일 경우: GetCaretPixelPos가 이미 m_margin.top가 더해졌기때문에 초기화하고 재계산.
+	    pt.y = m_caretPos.lineIndex * m_lineHeight;
+	}
     }
 
 	pt.y += m_margin.top;
