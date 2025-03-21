@@ -21,17 +21,26 @@
 # 사용법
 NemoEdit.h, NemoEdit.cpp 파일을 프로젝트에 추가하고 아래 내용대로 설정한다.
 ```
+View 클래스 헤더에 NemoEdit.h 추가, m_editCtrl 멤버변수 추가
+// ------------------------
 #include "NemoEdit.h"
+NemoEdit m_editCtrl;
 
-OnCreate에 아래 내용을 넣는다.
+View 클래스 OnCreate에 아래 내용을 넣는다. 기본적으로 Create만 사용하면 빈 에디터가 생성된다.
 // ------------------------
 // NemoEdit 컨트롤 생성
 CRect editRect(10, 10, 500, 400);  // 크기 설정
 m_editCtrl.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, editRect, this, 1001);
+```
 
+추가 설정 및 사용
+```
 // 기본 텍스트 설정
 std::wstring text = L"이것은 NemoEdit의 예제입니다.\nMFC 기반의 텍스트 에디터 컨트롤입니다.\n";
 m_editCtrl.SetText(text);
+
+// 텍스트 추가
+m_editCtrl.AddText(L"이것은 추가된 텍스트입니다.\n");
 
 // 에디터 텍스트 가져오기
 text = m_editCtrl.GetText();
