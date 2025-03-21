@@ -394,6 +394,13 @@ std::wstring NemoEdit::GetText() {
 	return m_rope.getText();
 }
 
+void NemoEdit::ClearText() {
+    m_rope.clear();
+    m_rope.insert(0, L"");
+    RecalcScrollSizes();
+    Invalidate();
+}
+
 // 선택된 텍스트 클립보드로 복사
 void NemoEdit::Copy() {
     if (!m_selectInfo.isSelected) return;
@@ -2364,7 +2371,7 @@ void NemoEdit::OnLButtonDown(UINT nFlags, CPoint point) {
     m_selectInfo.isSelecting = true;
     SetCapture();
     // 캐럿 표시
-    CreateSolidCaret(2, m_lineHeight - m_lineSpacing);
+    //CreateSolidCaret(2, m_lineHeight - m_lineSpacing);
     UpdateCaretPosition();
     ShowCaret();
     Invalidate();
