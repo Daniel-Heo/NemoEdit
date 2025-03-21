@@ -2899,7 +2899,7 @@ LRESULT NemoEdit::OnImeEndComposition(WPARAM wParam, LPARAM lParam)
     return DefWindowProc(WM_IME_ENDCOMPOSITION, wParam, lParam);
 }
 
-Rope::Rope() : root(nullptr), m_insertCnt(0), m_eraseCnt(0) {
+Rope::Rope() : root(nullptr), m_balanceCnt(0) {
     root = new RopeNode();
 }
 
@@ -2916,11 +2916,17 @@ void Rope::insert(size_t lineIndex, const std::wstring& text) {
         leaf->length++;
         updateLengthUpward(leaf, 1);
 
-
-        // 간단한 리밸런싱 확인 (5,000회마다)
-        if (++m_insertCnt % SPLIT_THRESHOLD == 0) {
+        // 노드 크기 기준 분할
+        if (leaf->length > SPLIT_THRESHOLD) {
             splitNode(leaf);
-            balanceRope();
+        }
+        
+        // 주기적인 전체 트리 균형 체크 (삽입 카운터 사용)
+        if (++m_balanceCnt % (SPLIT_THRESHOLD * 2) == 0) {
+            m_balanceCnt = 0;
+            if (isUnbalanced()) {
+                balanceRope();
+            }
         }
     }
 }
@@ -2957,9 +2963,15 @@ void Rope::erase(size_t lineIndex) {
     leaf->length--;
     updateLengthUpward(leaf, -1);
 
-    if (++m_eraseCnt % MERGE_THRESHOLD == 0) {
+    if (leaf->length < MERGE_THRESHOLD/2) {
         mergeIfNeeded(leaf);
-        balanceRope();
+    }
+
+    if (++m_balanceCnt % (MERGE_THRESHOLD * 2) == 0) {
+		m_balanceCnt = 0;
+        if (isUnbalanced()) {
+            balanceRope();
+        }
     }
 }
 
@@ -2996,7 +3008,6 @@ bool Rope::clear() {
     deleteAllNodes(root);
     lines.clear();
     root = new RopeNode();
-    m_insertCnt = m_eraseCnt = 0;
     return true;
 }
 
@@ -3268,6 +3279,44 @@ void Rope::deleteAllNodes(RopeNode* node) {
         delete current;
     }
 }
+
+// 트리 불균형 체크 함수 : 최소 깊이와 최대 깊이가 2배이면 불균형
+bool Rope::isUnbalanced() {
+    if (!root || root->isLeaf) return false;
+
+    int maxDepth = getMaxDepth(root);
+    int minDepth = getMinDepth(root);
+
+    // 최대 깊이가 최소 깊이의 2배 이상이면 불균형 상태로 간주
+    return (maxDepth > minDepth * 2);
+}
+
+// 최대 깊이 계산
+int Rope::getMaxDepth(RopeNode* node) {
+    if (!node) return 0;
+    if (node->isLeaf) return 1;
+
+    int leftDepth = getMaxDepth(node->left);
+    int rightDepth = getMaxDepth(node->right);
+
+    return 1 + max(leftDepth, rightDepth);
+}
+
+// 최소 깊이 계산
+int Rope::getMinDepth(RopeNode* node) {
+    if (!node) return 0;
+    if (node->isLeaf) return 1;
+
+    // 자식 노드가 없는 경우 처리
+    if (!node->left) return 1 + getMinDepth(node->right);
+    if (!node->right) return 1 + getMinDepth(node->left);
+
+    int leftDepth = getMinDepth(node->left);
+    int rightDepth = getMinDepth(node->right);
+
+    return 1 + min(leftDepth, rightDepth);
+}
+
 
 void Rope::eraseRange(size_t startLine, size_t eraseSize) {
     if (eraseSize == 0) return; // 유효하지 않은 범위 방지

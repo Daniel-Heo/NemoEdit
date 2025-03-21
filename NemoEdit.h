@@ -49,8 +49,7 @@ public:
 class Rope {
 private:
     RopeNode* root;    // Rope 트리의 루트 노드
-    size_t m_insertCnt; // split용 카운터
-    size_t m_eraseCnt; // merge용 카운터
+    size_t m_balanceCnt; // 트리 재조정용 체크 카운터
 
     // 내부 함수
     RopeNode* findLeaf(RopeNode* node, size_t idx, size_t& offset);
@@ -60,6 +59,9 @@ private:
     void mergeIfNeeded(RopeNode* leaf);
     void deleteLeafNode(RopeNode* node);
     void deleteAllNodes(RopeNode* node);
+    bool isUnbalanced();
+    int getMaxDepth(RopeNode* node);
+    int getMinDepth(RopeNode* node);
 
     // 휴리스틱 최적화
     void balanceRope();
