@@ -33,6 +33,9 @@ m_editCtrl.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, editRect, this
 std::wstring text = L"이것은 NemoEdit의 예제입니다.\nMFC 기반의 텍스트 에디터 컨트롤입니다.\n";
 m_editCtrl.SetText(text);
 
+// 텍스트 추가
+m_editCtrl.AddText(L"이것은 추가된 텍스트입니다.\n");
+
 // 에디터 텍스트 가져오기
 text = m_editCtrl.GetText();
 
