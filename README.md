@@ -31,7 +31,10 @@ View 클래스 OnCreate에 아래 내용을 넣는다. 기본적으로 Create만
 // NemoEdit 컨트롤 생성
 CRect editRect(10, 10, 500, 400);  // 크기 설정
 m_editCtrl.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, editRect, this, 1001);
+```
 
+추가 설정 및 사용
+```
 // 기본 텍스트 설정
 std::wstring text = L"이것은 NemoEdit의 예제입니다.\nMFC 기반의 텍스트 에디터 컨트롤입니다.\n";
 m_editCtrl.SetText(text);
