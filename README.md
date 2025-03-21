@@ -23,6 +23,10 @@ NemoEdit.h, NemoEdit.cpp 파일을 프로젝트에 추가하고 아래 내용대
 ```
 #include "NemoEdit.h"
 
+OnCreate의 헤더에 m_editCtrl 멤버변수 추가
+// ------------------------
+NemoEdit m_editCtrl;
+
 OnCreate에 아래 내용을 넣는다.
 // ------------------------
 // NemoEdit 컨트롤 생성
