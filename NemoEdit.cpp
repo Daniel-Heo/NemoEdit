@@ -22,7 +22,7 @@
 // NemoEdit 클래스 생성자 - 기본 초기화
 NemoEdit::NemoEdit()
     : m_isReadOnly(false), m_showLineNumbers(true),
-      m_wordWrap(false), m_wordWrapWidth(0),
+      m_wordWrap(true), m_wordWrapWidth(0),
       m_lineSpacing(5),
 	  m_margin({ 5, 15, 5, 0 }),
       m_lineHeight(0), m_charWidth(0),
@@ -181,7 +181,6 @@ int NemoEdit::CalculateNumberAreaWidth() {
         digits++;
         totalLines /= 10;
     }
-
     m_numberAreaWidth = digits * m_charWidth + 20;
     return m_numberAreaWidth;
 }
@@ -236,9 +235,10 @@ void NemoEdit::SetFont(const LOGFONT& lf) {
     TEXTMETRIC tm;
     dc.GetTextMetrics(&tm);
     m_lineHeight = tm.tmHeight + tm.tmExternalLeading + m_lineSpacing;
-    m_charWidth = tm.tmAveCharWidth;
     // 메모리 DC에도 새 폰트 선택
     m_memDC.SelectObject(&m_font);
+    m_charWidth = GetTextWidth(L"08")/2; // 공백 문자 너비로 대체
+    m_nextDiffNum = 0; // numLineArea 재계산
     RecalcScrollSizes();
     Invalidate();
 }
@@ -336,6 +336,7 @@ void NemoEdit::SetLineNumColor(COLORREF lineNumColor, COLORREF bgColor) {
 // 에디터 전체 텍스트 설정
 void NemoEdit::SetText(const std::wstring& text) {
     m_rope.clear();
+    m_nextDiffNum = 0; // numLineArea 재계산
 
     // 개행 기준으로 문자열 파싱
     std::deque<std::wstring> lines;
@@ -394,9 +395,86 @@ std::wstring NemoEdit::GetText() {
 	return m_rope.getText();
 }
 
+void NemoEdit::AddText(std::wstring text) {
+    // 라인이 없는 경우 SetText 호출 (텍스트 초기화)
+    if (m_rope.getSize() == 0) {
+        SetText(text);
+        return;
+    }
+
+    // 개행 기준으로 문자열 파싱
+    std::deque<std::wstring> lines;
+    size_t pos = 0;
+
+    while (pos < text.size()) {
+        size_t nlPos = text.find(L'\n', pos);
+        std::wstring line;
+
+        if (nlPos == std::wstring::npos) {
+            line = text.substr(pos);
+            if (!line.empty() && line.back() == L'\r') {
+                line.pop_back();  // CR 제거
+            }
+            lines.push_back(line);
+            break;
+        }
+        else {
+            line = text.substr(pos, nlPos - pos);
+            if (!line.empty() && line.back() == L'\r') {
+                line.pop_back();
+            }
+            lines.push_back(line);
+            pos = nlPos + 1;
+        }
+    }
+
+    // 텍스트가 없으면 종료
+    if (lines.empty()) {
+        return;
+    }
+
+    // 추가 위치는 마지막 라인 다음 (마지막 라인의 인덱스 + 1)
+    size_t insertIndex = m_rope.getSize();
+
+    // Undo 레코드 준비
+    UndoRecord rec;
+    rec.type = UndoRecord::Insert;
+    rec.start = TextPos(insertIndex, 0);
+    rec.text = text;  // 원본 텍스트 그대로 저장
+
+    // SPLIT_THRESHOLD 값을 넘는 경우 insertMultiple 사용
+    if (lines.size() > SPLIT_THRESHOLD) {
+        m_rope.insertMultiple(insertIndex, lines);
+    }
+    else {
+        // 적은 양의 텍스트는 개별 삽입
+        for (const auto& line : lines) {
+            m_rope.insert(insertIndex++, line);
+        }
+    }
+
+    // 캐럿 위치 갱신 - 추가된 텍스트의 마지막 위치로
+    m_caretPos.lineIndex = insertIndex - 1;
+    m_caretPos.column = lines.back().length();
+
+    // 선택 영역 초기화
+    m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
+    m_selectInfo.isSelected = false;
+    m_selectInfo.isSelecting = false;
+
+    // Undo/Redo 스택 갱신
+    m_undoStack.push_back(rec);
+    m_redoStack.clear();
+
+    // 화면 갱신 및 커서 위치 보정
+    EnsureCaretVisible();
+    RecalcScrollSizes();
+    Invalidate();
+}
+
 void NemoEdit::ClearText() {
     m_rope.clear();
-    m_rope.insert(0, L"");
+	m_rope.insert(0, L"");
     RecalcScrollSizes();
     Invalidate();
 }
@@ -1498,6 +1576,7 @@ void NemoEdit::EnsureCaretVisible() {
             pt.y = prevLineCnt * m_lineHeight;
         }
         m_scrollYLine = max(0, m_scrollYLine);
+        pt.y += m_margin.top;
     }
     // 일반 모드
     else {
@@ -1526,13 +1605,7 @@ void NemoEdit::EnsureCaretVisible() {
             inc = pt.y + m_lineHeight - (int)(client.Height() / m_lineHeight) * m_lineHeight;
             pt.y -= m_lineHeight;
         }
-	else {
-	    // 화면에 보이는 라인일 경우: GetCaretPixelPos가 이미 m_margin.top가 더해졌기때문에 초기화하고 재계산.
-	    pt.y = m_caretPos.lineIndex * m_lineHeight;
-	}
     }
-
-	pt.y += m_margin.top;
 
     NemoSetScrollPos(SB_HORZ, m_scrollX, TRUE);
     NemoSetScrollPos(SB_VERT, m_scrollYLine, TRUE);
@@ -2699,6 +2772,7 @@ void NemoEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags) {
         m_selectInfo.isSelected = !(m_selectInfo.start.lineIndex == m_selectInfo.end.lineIndex &&
             m_selectInfo.start.column == m_selectInfo.end.column);
     }
+
     EnsureCaretVisible();
     Invalidate(TRUE);
 }

@@ -156,6 +156,7 @@ public:
     // 텍스트 조작 메서드
     void SetText(const std::wstring& text);
     std::wstring GetText();
+    void AddText(std::wstring text);
     void ClearText();
     void Copy();
     void Cut();
