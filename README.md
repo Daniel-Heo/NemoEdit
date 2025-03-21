@@ -36,6 +36,9 @@ m_editCtrl.SetText(text);
 // 에디터 텍스트 가져오기
 text = m_editCtrl.GetText();
 
+// 에디터 초기화
+m_editCtrl.ClearText();
+
 // 폰트 설정
 m_editCtrl.SetFont(L"Noto Sans Kr", 15, true, false); // 글꼴, 크기, 볼드, 이탤릭
 // 라인 여백 설정
