@@ -21,13 +21,12 @@
 # 사용법
 NemoEdit.h, NemoEdit.cpp 파일을 프로젝트에 추가하고 아래 내용대로 설정한다.
 ```
-#include "NemoEdit.h"
-
-OnCreate의 헤더에 m_editCtrl 멤버변수 추가
+View 클래스 헤더에 NemoEdit.h 추가, m_editCtrl 멤버변수 추가
 // ------------------------
+#include "NemoEdit.h"
 NemoEdit m_editCtrl;
 
-OnCreate에 아래 내용을 넣는다.
+View 클래스 OnCreate에 아래 내용을 넣는다. 기본적으로 Create만 사용하면 빈 에디터가 생성된다.
 // ------------------------
 // NemoEdit 컨트롤 생성
 CRect editRect(10, 10, 500, 400);  // 크기 설정
