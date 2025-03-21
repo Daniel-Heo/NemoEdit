@@ -33,6 +33,8 @@
 #define CURSOR_UP 1
 #define CURSOR_DOWN -1
 
+using namespace std;
+
 class RopeNode {
 public:
     std::deque<std::list<std::wstring>::iterator> data;  // 리프 노드의 라인 이터레이터들
@@ -59,9 +61,6 @@ private:
     void mergeIfNeeded(RopeNode* leaf);
     void deleteLeafNode(RopeNode* node);
     void deleteAllNodes(RopeNode* node);
-    bool isUnbalanced();
-    int getMaxDepth(RopeNode* node);
-    int getMinDepth(RopeNode* node);
 
     // 휴리스틱 최적화
     void balanceRope();
@@ -69,6 +68,9 @@ private:
     void collectInternalNodes(RopeNode* node, std::vector<RopeNode*>& internals);
     RopeNode* buildBalancedTree(std::list<RopeNode*>& leaves, int start, int end);
     int updateNodeLengths(RopeNode* node); // root에 걸어서 length 재계산
+    bool isUnbalanced();
+    int getMaxDepth(RopeNode* node);
+    int getMinDepth(RopeNode* node);
 
 public:
     std::list<std::wstring> lines;  // 원본 텍스트 라인 저장소
