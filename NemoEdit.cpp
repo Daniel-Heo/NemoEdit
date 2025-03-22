@@ -1223,7 +1223,7 @@ int NemoEdit::GetTextWidth(const std::wstring& line) {
     return m_memDC.GetTextExtent(line.c_str(), line.length()).cx;
 }
 
-// lineIndex: 라인 인덱스, startPos: 시작 위치(numberArea가 있을 경우 그 크기 아니면 0), wrapWidth: 랩 너비  
+// lineIndex: 라인 인덱스
 std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
     std::vector<int> wrapPos;
 
@@ -1273,9 +1273,11 @@ std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
 }
 
 // 주어진 텍스트 위치의 픽셀 좌표 계산 : 화면좌표 ( lineIndex와 column을 받아서 좌표로 계산한 후에 반환 )
+// Margin이 적용된 화면 좌표계에서 Scrolling을 적용하여 x,y 좌표를 계산 ( 이것을 받아서 -값이거나 화면  크기와 비교해서 크면 화면을 벗어난 것으로 한다. )
 // 좌표는 워드랩이 아닐 경우 스크롤 오프셋을 기준으로 계산
-// 워드랩일 경우 m_wrapInfo를 사용하여 계산하고 스크린을 넘어갈 경우에 이전줄이나 다음줄로 표시 : 상대좌표 개념 ( 필요 없는 연산 줄이기 )
+// 워드랩일 경우 m_wrapInfo를 사용하여 계산하고 y는 스크린을 넘어갈 경우에 이전줄이나 다음줄로 표시 ( 이 함수를 호출한 부분에서 필요하면 정확하게 계산한다. )
 //                       X 좌표는 정확하게 계산, Y좌표는 화면을 넘어가면 이전줄 또는 다음줄로 표시
+//                      margin을 적용하여 화면의 크기에 적용하여 계산
 //                       X는 스크롤 되어있는만큼 뺀다. Y는 스크롤 되어있는만큼 뺀다.
 CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
     CPoint pt(0, 0);
@@ -1284,15 +1286,19 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
     if (lineIndex < 0) lineIndex = 0;
     if (lineIndex >= (int)m_rope.getSize()) lineIndex = (int)m_rope.getSize() - 1;
 
+    // 화면 표시 영역 크기 계산
+    CRect client;
+    GetClientRect(&client);
+    int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
+    int screenHeight = client.Height() - m_margin.top - m_margin.bottom;
+    int visibleLines = screenHeight / m_lineHeight; // 마진을 제외한 화면에 보이는 줄 수 ( top margin만 계산 )
+
     // 워드랩 모드일 때 다른 계산 방식 사용
     if (m_wordWrap) {
-        // 라인의 워드랩 위치 계산
-        std::vector<int> wrapPositions = FindWordWrapPosition(lineIndex);
-
         // 현재 라인의 몇 번째 워드랩 라인인지 계산
-        int wrapLineIndex = 0;
-        int startCol = 0;
-
+		int wrapLineIndex = 0; // 캐럿 위치가 속한 워드랩 라인 인덱스
+		int startCol = 0; // 현재 워드랩 라인의 시작 컬럼
+        std::vector<int> wrapPositions = FindWordWrapPosition(lineIndex);
         for (size_t i = 0; i < wrapPositions.size(); i++) {
             if (pos.column < wrapPositions[i]) {
                 break;
@@ -1301,33 +1307,32 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
             wrapLineIndex++;
         }
 
-        // 화면 줄 수 계산
-        CRect client;
-        GetClientRect(&client);
-        int visibleLines = client.Height() / m_lineHeight;
-
+        // 화면 위에 있을 경우
 		if (lineIndex< m_scrollYLine || 
             (lineIndex== m_scrollYLine&& wrapLineIndex< m_scrollYWrapLine)) {
-			// 화면 위에 있을 경우
 			pt.y = -m_lineHeight;
 		}
-		else {
-			// 화면에 보이는 라인일 경우
-			// 수직 위치 (스크롤 오프셋 고려)
+		// 화면 밑에 있을 경우 : 줄수가 화면에 넘어가는 것의 계산 패싱을 위해 ( 원거리 계산을 줄이기 위해 )
+		else if (lineIndex > m_scrollYLine + visibleLines) {
+			pt.y = screenHeight + m_lineHeight;
+        }
+        // 화면에 보이는 라인일 경우 : 워드랩으로 화면을 넘어갈 수 있음
+        else {
+			// 수직 위치 : 현재 캐럿 라인 전까지의 전체 줄 수 계산
 			int totalLines = -m_scrollYWrapLine;
 			for (int i = m_scrollYLine; i < lineIndex; i++) {
                 totalLines += FindWordWrapPosition(i).size()+1;
 				if (totalLines > visibleLines) break;
 			}
-			
 			totalLines += wrapLineIndex;
+
+            // 화면 밑에 있을 경우 : 이전 줄수가 화면 최대 줄수와 같거나 초과한 경우
 			if (totalLines >= visibleLines) {
-				// 화면 밑에 있을 경우
-				pt.y = client.Height() + m_lineHeight;
+				pt.y = screenHeight + m_lineHeight;
 			}
+            // 화면 안에 있을 경우
             else {
-                // 화면 안에 있을 경우
-                pt.y = totalLines * m_lineHeight;
+                pt.y = totalLines * m_lineHeight; // 이전 줄수 * 라인 높이 = 현재 줄 수 위치
             }
 		}
 
@@ -1339,8 +1344,7 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
 			}
             else {
                 std::wstring text = line.substr(startCol, pos.column - startCol);
-                CSize extent = m_memDC.GetTextExtent(text.c_str(), text.length());
-                pt.x = extent.cx;
+                pt.x = GetTextWidth(text);
             }
         }
         else {
@@ -1357,8 +1361,9 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
         if (!line.empty()) {
             if (pos.column > 0) {
                 std::wstring text = line.substr(0, pos.column);
-                CSize extent = m_memDC.GetTextExtent(text.c_str(), text.length());
-                pt.x = extent.cx;
+                //CSize extent = m_memDC.GetTextExtent(text.c_str(), text.length());
+                //pt.x = extent.cx;
+                pt.x = GetTextWidth(text);
             }
             else {
                 pt.x = 0;
@@ -1366,14 +1371,7 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
         }
     }
 
-    // 라인 번호 표시 중이면 여백만큼 우측으로 이동
-    if (m_showLineNumbers) {
-        pt.x += CalculateNumberAreaWidth();
-    }
-
-    // 가로/세로 스크롤 오프셋 적용
-    pt.x -= m_scrollX-m_margin.left;
-    pt.y += m_margin.top;
+    pt.x -= m_scrollX;
 
     return pt;
 }
@@ -1489,67 +1487,66 @@ void NemoEdit::UpdateCaretPosition() {
     CPoint pt = GetCaretPixelPos(m_caretPos);
     CRect client;
     GetClientRect(&client);
-	int clientWidth = client.Width();
+	int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
+	int screenHeight = client.Height() - m_margin.top - m_margin.bottom;
 
     // 라인 번호 영역의 동적 계산된 너비 가져오기
     int numberAreaWidth = CalculateNumberAreaWidth();
 
 	// pt.x가 m_numberAreaWidth보다 작을 경우 스크롤이 필요함
-	if (pt.x < numberAreaWidth || pt.x >  client.Width() || pt.y < 0 || pt.y >= client.Height()) {
+	if (pt.x < 0 || pt.x >  screenWidth || pt.y < 0 || pt.y > screenHeight) {
 		if (m_caretVisible == true) {
 			::HideCaret(m_hWnd);
 			m_caretVisible = false;
 		}
-		return;
-	}
-	::SetCaretPos(pt.x, pt.y);
-	::ShowCaret(m_hWnd);
-	m_caretVisible = true;
+	} else {
+		pt.x += numberAreaWidth + m_margin.left;
+		pt.y += m_margin.top;
+
+        ::SetCaretPos(pt.x, pt.y);
+        ::ShowCaret(m_hWnd);
+        m_caretVisible = true;
+    }
 }
 
 // 캐럿이 보이도록 스크롤 조정 : 입력이나 이동이 있을 경우 호출, 캐럿이 보이지 않으면 스크롤 조정
-// m_warapInfo 정보를 갱신한다. ( 텍스트 변경사항 적용 )
-// WordWrapInfo 구조체에 maxWidth 필드 추가 후 EnsureCaretVisible 함수 수정
 void NemoEdit::EnsureCaretVisible() {
-    //if (::GetFocus() != m_hWnd) return;
     CPoint pt = GetCaretPixelPos(m_caretPos);
+
+    // 화면 표시 영역 크기 계산
     CRect client;
     GetClientRect(&client);
-    int clientWidth = client.Width();
-
-    // 라인 번호 영역의 동적 계산된 너비 가져오기
-    int numberAreaWidth = CalculateNumberAreaWidth();
+    int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
+    int screenHeight = client.Height() - m_margin.top - m_margin.bottom;
+    int visibleLines = screenHeight / m_lineHeight; // 마진을 제외한 화면에 보이는 줄 수 ( top margin만 계산 )
 
     // 워드랩 모드
     if (m_wordWrap) {
-        m_wordWrapWidth = client.Width() - numberAreaWidth - m_margin.right; // 번호 자리수가 바뀔 수 있으므로 계속 업데이트한다.
+        m_wordWrapWidth = screenWidth; // 번호 자리수가 바뀔 수 있으므로 계속 업데이트한다.
 
         // 현재 라인의 몇 번째 워드랩 라인인지 계산
-        auto wrapPositions = FindWordWrapPosition(m_caretPos.lineIndex);
-        int wrapLineIndex = 0;
-        int currentHideLine = 0;
+        int wrapLineIndex = 0; // 캐럿 위치가 속한 워드랩 라인 인덱스
+        int startCol = 0; // 현재 워드랩 라인의 시작 컬럼
+        std::vector<int> wrapPositions = FindWordWrapPosition(m_caretPos.lineIndex);
         for (size_t i = 0; i < wrapPositions.size(); i++) {
-            if (m_caretPos.column < wrapPositions[i]) break;
+            if (m_caretPos.column < wrapPositions[i]) {
+                break;
+            }
+            startCol = wrapPositions[i];
             wrapLineIndex++;
         }
-        currentHideLine = wrapPositions.size() - wrapLineIndex;
 
-        // 화면 줄 수 계산
-        int visibleLines = client.Height() / m_lineHeight;
-
-        // 세로 스크롤 조정 - pt.y 기준으로 조정
+        // 캐럿이 화면 위로 벗어남
         if (pt.y < 0) {
-            // 캐럿이 화면 위로 벗어남
             m_scrollYLine = m_caretPos.lineIndex;
             m_scrollYWrapLine = wrapLineIndex;
-
             pt.y = 0;
         }
-        else if (pt.y + m_lineHeight > client.Height()) {
-            // 캐럿이 화면 아래로 벗어남
+        // 캐럿이 화면 아래로 벗어남 : 현재의 캐럿 위치에서 위로 화면 줄수에 맞는 시작점을 구함
+        else if (pt.y + m_lineHeight > screenHeight) {
             int totalLineCnt = 0;
             int wrapCnt = 0;
-            totalLineCnt -= currentHideLine;
+            totalLineCnt -= wrapPositions.size() - wrapLineIndex;
             for (int i = m_caretPos.lineIndex; i > 0; i--) {
                 wrapCnt = FindWordWrapPosition(i).size() + 1; // 화면 줄수 + 워드랩 줄수
                 totalLineCnt += wrapCnt;
@@ -1562,35 +1559,26 @@ void NemoEdit::EnsureCaretVisible() {
                     break;
                 }
             }
-
             pt.y = (visibleLines - 1) * m_lineHeight;
         }
-        else {
-            // 화면에 보이는 라인일 경우
 
-            // 이전 라인 수 계산
-            int prevLineCnt = -m_scrollYWrapLine;
-            for (int i = m_scrollYLine; i < m_caretPos.lineIndex; i++) {
-                prevLineCnt += FindWordWrapPosition(i).size() + 1; // 화면 줄수 + 워드랩 줄수
-            }
-            prevLineCnt += wrapLineIndex;
-            pt.y = prevLineCnt * m_lineHeight;
-        }
-        m_scrollYLine = max(0, m_scrollYLine);
-        pt.y += m_margin.top;
+        // 캐럿이 안보일 경우에 스크롤 재계산 ( 워드랩이라 초과는 계산하지 않는다 )
+		if (pt.x < 0) {
+			m_scrollX = max(0, m_scrollX-pt.x);
+			pt.x = 0;
+		}
     }
     // 일반 모드
     else {
         int inc;
 
         // 기존 워드랩 비활성화 모드 (기존 코드 유지)
-        // pt.x가 numberAreaWidth보다 작을 경우 스크롤이 필요함
-        if (pt.x < numberAreaWidth) {
-            m_scrollX = max(0, m_scrollX + pt.x - numberAreaWidth);
-            pt.x = numberAreaWidth;
+        if (pt.x < 0) {
+            m_scrollX = max(0, m_scrollX + pt.x);
+            pt.x = 0;
         }
-        else if (pt.x + m_margin.right > clientWidth) {
-            inc = pt.x + m_margin.right - clientWidth;
+        else if (pt.x + m_margin.right > screenWidth) {
+            inc = pt.x + m_margin.right - screenWidth;
             m_scrollX += inc;
             pt.x -= inc;
         }
@@ -1598,15 +1586,19 @@ void NemoEdit::EnsureCaretVisible() {
         // pt.y가 client.Height()보다 클 경우 스크롤이 필요함
         if (pt.y < 0) {
             m_scrollYLine = m_caretPos.lineIndex;
-            pt.y += m_lineHeight;
+            pt.y = 0;
         }
-        else if (pt.y + m_lineHeight >= client.Height()) {
-            inc = pt.y + m_lineHeight - client.Height();
+        else if (pt.y + m_lineHeight >= screenHeight) {
+            inc = pt.y + m_lineHeight - screenHeight;
             m_scrollYLine += inc / m_lineHeight + 1;
-            inc = pt.y + m_lineHeight - (int)(client.Height() / m_lineHeight) * m_lineHeight;
+            inc = pt.y + m_lineHeight - (int)(screenHeight / m_lineHeight) * m_lineHeight;
             pt.y -= m_lineHeight;
         }
     }
+
+    m_scrollYLine = max(0, m_scrollYLine);
+    pt.x += CalculateNumberAreaWidth() + m_margin.left;
+    pt.y += m_margin.top;
 
     NemoSetScrollPos(SB_HORZ, m_scrollX, TRUE);
     NemoSetScrollPos(SB_VERT, m_scrollYLine, TRUE);
@@ -1942,6 +1934,7 @@ void NemoEdit::OnPaint() {
             int lineWidth = GetLineWidth(lineIndex);
             if (numberAreaWidth - m_scrollX + lineWidth <= 0) {
                 // 완전히 화면 왼쪽 바깥에 있으면 그리지 않고 다음 라인으로
+                DrawLineNo(lineIndex, y, lf);
                 y += m_lineHeight;
                 lineIndex++;
                 continue;
@@ -3128,7 +3121,7 @@ void Rope::splitNode(RopeNode* leaf) {
     // 분할 노드에 데이터 복사
     newLeaf->data.assign(midIter, leaf->data.end());
     // 기존 노드 절반 삭제
-    leaf->data.erase(midIter, leaf->data.end());
+    leaf->data.resize(leaf->data.size() / 2);
 
     // length 업데이트
     leaf->length = leaf->data.size();

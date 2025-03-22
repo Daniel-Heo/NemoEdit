@@ -14,6 +14,11 @@
 //    2025.3.19   Daniel Heo  최초 생성
 //*******************************************************************************
 #pragma once
+#ifdef _DEBUG
+#define _SECURE_SCL 0
+#define _HAS_ITERATOR_DEBUGGING 0
+#define _ITERATOR_DEBUG_LEVEL 0  
+#endif
 #include <afxwin.h>
 #include <list>
 #include <string>
@@ -26,9 +31,8 @@
 #include <optional>
 #include <stack>
 
-
-#define SPLIT_THRESHOLD 2000
-#define MERGE_THRESHOLD 1000
+#define SPLIT_THRESHOLD         2000
+#define MERGE_THRESHOLD     1000
 
 #define CURSOR_UP 1
 #define CURSOR_DOWN -1
@@ -37,14 +41,14 @@ using namespace std;
 
 class RopeNode {
 public:
-    std::deque<std::list<std::wstring>::iterator> data;  // 리프 노드의 라인 이터레이터들
+    std::vector<std::list<std::wstring>::iterator> data;  // 리프 노드의 라인 이터레이터들
     size_t      length;  // 이 노드(서브트리)가 보유한 총 라인 수
     RopeNode* left;
     RopeNode* right;
     RopeNode* parent;
     bool        isLeaf;
 
-    RopeNode() : length(0), left(nullptr), right(nullptr), parent(nullptr), isLeaf(true) {}
+    RopeNode() : length(0), left(nullptr), right(nullptr), parent(nullptr), isLeaf(true) { data.reserve(SPLIT_THRESHOLD + 1);  }
     ~RopeNode() { data.clear(); }
 };
 
