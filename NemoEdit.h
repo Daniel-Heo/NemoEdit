@@ -235,7 +235,7 @@ private:
 	void NemoSetScrollPos(int nBar, int nPos, BOOL bRedraw); // NemoSetScrollPos 래핑 함수
     // 텍스트 그리기
     //int GetLineWidth(int lineIndex);
-    void DrawLineNo(int lineIndex, int yPos, LOGFONT lf);
+    void DrawLineNo(int lineIndex, int yPos);
     void DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring& segment, int xOffset, int y);
     // 이동
     void MoveCaretToPrevWord();  // 이전 단어의 시작으로 이동

@@ -133,22 +133,16 @@ int NemoEdit::GetMaxWidth() {
 
     CRect client;
     GetClientRect(&client);
-    int visibleLines = client.Height() / m_lineHeight;
+    int visibleLines =( client.Height()-m_margin.top-m_margin.bottom) / m_lineHeight;
 
     // 시작 라인과 끝 라인 결정 (모드에 따라 다름)
     int startLine = 0;
     int endLine = 0;
 
-    if (m_wordWrap) {
-        // 워드랩 모드: m_scrollYLine부터 계산
-        startLine = m_scrollYLine;
-        endLine = min(static_cast<int>(m_rope.getSize() - 1), startLine + visibleLines);
-    }
-    else {
-        // 일반 모드: m_scrollYLine부터 계산
-        startLine = m_scrollYLine;
-        endLine = min(static_cast<int>(m_rope.getSize() - 1), startLine + visibleLines);
-    }
+    // 통합 모드: m_scrollYLine부터 계산
+    startLine = m_scrollYLine;
+    endLine = min(static_cast<int>(m_rope.getSize() - 1), startLine + visibleLines);
+
 
     // 화면에 보이는 라인들만 계산
     for (int i = startLine; i <= endLine; i++) {
@@ -1235,6 +1229,7 @@ std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
     if (lineWidth <= m_wordWrapWidth) {
         return {};
     }
+    
 
     int currentPos = 0;
     int currWidthSum = 0;
@@ -1292,6 +1287,7 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
     int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
     int screenHeight = client.Height() - m_margin.top - m_margin.bottom;
     int visibleLines = screenHeight / m_lineHeight; // 마진을 제외한 화면에 보이는 줄 수 ( top margin만 계산 )
+    m_wordWrapWidth = screenWidth;
 
     // 워드랩 모드일 때 다른 계산 방식 사용
     if (m_wordWrap) {
@@ -1361,8 +1357,6 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
         if (!line.empty()) {
             if (pos.column > 0) {
                 std::wstring text = line.substr(0, pos.column);
-                //CSize extent = m_memDC.GetTextExtent(text.c_str(), text.length());
-                //pt.x = extent.cx;
                 pt.x = GetTextWidth(text);
             }
             else {
@@ -1522,8 +1516,6 @@ void NemoEdit::EnsureCaretVisible() {
 
     // 워드랩 모드
     if (m_wordWrap) {
-        m_wordWrapWidth = screenWidth; // 번호 자리수가 바뀔 수 있으므로 계속 업데이트한다.
-
         // 현재 라인의 몇 번째 워드랩 라인인지 계산
         int wrapLineIndex = 0; // 캐럿 위치가 속한 워드랩 라인 인덱스
         int startCol = 0; // 현재 워드랩 라인의 시작 컬럼
@@ -1637,44 +1629,24 @@ void NemoEdit::RecalcScrollSizes() {
     si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
 
     if (m_wordWrap) {
-        // ==========================================
-        // WordWrap 모드 스크롤 처리 (화면 영역만 계산)
-        // ==========================================
-
         // 워드랩 모드에서는 수평 스크롤바를 비활성화
         m_scrollX = 0;
 
-        // 워드랩 너비 설정
-        m_wordWrapWidth = client.Width() - numberAreaWidth - m_margin.right;
-
-        int visibleLines = max(1, client.Height() / m_lineHeight);
+        int visibleLines = max(1, (client.Height()-m_margin.top-m_margin.bottom) / m_lineHeight);
 
         // 총 라인 수 - 전체 라인 기준으로 사용
-        int totalRealLines = m_rope.getSize();
-        int bottomWrapCnt = 0;
-        int bottomWrapStart = max(0, totalRealLines - visibleLines);
-        for (int i = bottomWrapStart; i < totalRealLines; i++) {
-            std::vector<int> wrapPositions = FindWordWrapPosition(i);
-            bottomWrapCnt += wrapPositions.size();
-        }
-
-        if (totalRealLines < 1) totalRealLines = 1;
+        int totalRealLines = max(1, m_rope.getSize());
 
         // 수직 스크롤바 설정 - 일반 라인 수 기준으로 설정
         si.nMin = 0;
-        si.nMax = totalRealLines + bottomWrapCnt - 1;
+        si.nMax = totalRealLines + visibleLines - 2;
         si.nPage = visibleLines;
         si.nPos = m_scrollYLine;
         NemoSetScrollInfo(SB_VERT, &si, TRUE);
     }
     else {
-        // ==========================================
-        // 일반 모드 (WordWrap 없음) 스크롤 처리
-        // ==========================================
-
         // 일반 텍스트 라인 수 계산
-        int totalDisplayLines = m_rope.getSize();
-        if (totalDisplayLines < 1) totalDisplayLines = 1;
+        int totalDisplayLines = max(1,m_rope.getSize());
 
         // 최대 텍스트 폭 계산 (가로 스크롤)
         int maxWidth = GetMaxWidth();
@@ -1778,8 +1750,13 @@ void NemoEdit::NemoSetScrollPos(int nBar, int nPos, BOOL bRedraw) {
     }
 }
 
-void NemoEdit::DrawLineNo(int lineIndex, int yPos, LOGFONT lf) {
+void NemoEdit::DrawLineNo(int lineIndex, int yPos) {
     if (!m_showLineNumbers) return;
+
+    // 라인번호 폰트 설정
+    LOGFONT lf;
+    m_font.GetLogFont(&lf);
+    lf.lfQuality = PROOF_QUALITY;  // 선명한 글꼴 렌더링
 
     // 현재 폰트와 색상 저장
     COLORREF oldTextColor = m_memDC.GetTextColor();
@@ -1808,6 +1785,9 @@ void NemoEdit::DrawLineNo(int lineIndex, int yPos, LOGFONT lf) {
     // 원래 색상과 폰트로 복원
     m_memDC.SetTextColor(oldTextColor);
     m_memDC.SelectObject(pOldFont);
+
+    // 임시 폰트 객체 정리
+    numFont.DeleteObject(); // 사용이 끝난 CFont 객체 정리
 }
 
 // 화면 그리기 (더블 버퍼링 사용)
@@ -1828,11 +1808,7 @@ void NemoEdit::OnPaint() {
     m_memDC.FillSolidRect(client, m_colorInfo.textBg);
     m_memDC.SelectObject(&m_font);
     m_memDC.SetBkMode(TRANSPARENT);
-
-    // 라인번호 폰트 설정
-    LOGFONT lf;
-    m_font.GetLogFont(&lf);
-    lf.lfQuality = PROOF_QUALITY;  // 선명한 글꼴 렌더링
+    m_memDC.SetTextColor(m_colorInfo.text);
 
     // 라인 번호 영역 그리기
     int numberAreaWidth = 0;
@@ -1842,11 +1818,6 @@ void NemoEdit::OnPaint() {
         gutterRect.right = numberAreaWidth;
         m_memDC.FillSolidRect(gutterRect, m_colorInfo.lineNumBg);
     }
-
-    CFont newFont;
-    newFont.CreateFontIndirect(&lf);
-    m_memDC.SelectObject(&newFont);
-    m_memDC.SetTextColor(m_colorInfo.text);
 
     // 텍스트 라인 출력 (선택 영역 강조 포함)
     int y = m_margin.top;
@@ -1874,7 +1845,7 @@ void NemoEdit::OnPaint() {
             // wordwrap이 없는 경우
             if (wrapPositions.empty()) {
                 // 워드랩이 없는 라인 처리
-				DrawLineNo(lineIndex, y, lf);
+				DrawLineNo(lineIndex, y);
                 DrawSegment(lineIndex, 0, lineStr, numberAreaWidth, y);
                 y += m_lineHeight;
                 lineIndex++;
@@ -1907,7 +1878,7 @@ void NemoEdit::OnPaint() {
                         endPos = wrapPositions[i];
                     }
                     
-					if (i == 0) DrawLineNo(lineIndex, y, lf);
+					if (i == 0) DrawLineNo(lineIndex, y);
                     std::wstring segment = lineStr.substr(startPos, endPos - startPos);
                     DrawSegment(lineIndex, startPos, segment, numberAreaWidth, y);
                     y += m_lineHeight;
@@ -1934,7 +1905,7 @@ void NemoEdit::OnPaint() {
             int lineWidth = GetLineWidth(lineIndex);
             if (numberAreaWidth - m_scrollX + lineWidth <= 0) {
                 // 완전히 화면 왼쪽 바깥에 있으면 그리지 않고 다음 라인으로
-                DrawLineNo(lineIndex, y, lf);
+                DrawLineNo(lineIndex, y);
                 y += m_lineHeight;
                 lineIndex++;
                 continue;
@@ -1950,7 +1921,7 @@ void NemoEdit::OnPaint() {
                 lineStr = preText;
             }
 
-            DrawLineNo(lineIndex, y, lf);
+            DrawLineNo(lineIndex, y);
             DrawSegment(lineIndex, 0, lineStr, numberAreaWidth, y);
             y += m_lineHeight;
             lineIndex++;
@@ -2267,13 +2238,23 @@ std::wstring NemoEdit::LoadClipText() {
 // 윈도우 크기 조정
 void NemoEdit::OnSize(UINT nType, int cx, int cy) {
     CWnd::OnSize(nType, cx, cy);
-    if(cx <= 0 || cy <= 0) return;
+    if (cx <= 0 || cy <= 0) return;
+
+    // 스크롤 크기 재계산
     RecalcScrollSizes();
+
+    // 메모리 DC 비트맵 재설정
     CClientDC dc(this);
+
+    // 새 비트맵 생성 및 선택
     m_memBitmap.DeleteObject();
     m_memBitmap.CreateCompatibleBitmap(&dc, cx, cy);
     m_memDC.SelectObject(&m_memBitmap);
+
+    // 메모리 크기 갱신
     m_memSize = CSize(cx, cy);
+
+    // 화면 갱신 요청
     Invalidate(FALSE);
 }
 
