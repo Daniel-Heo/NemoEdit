@@ -59,7 +59,7 @@ m_editCtrl.ShowLineNumbers(true);
 // 읽기 전용 설정
 m_editCtrl.SetReadOnly(true);
 // 여백 설정
-m_editCtrl.SetMargin(5, 20, 5, 0); // 왼쪽, 오른쪽, 위, 아래 ( 오른쪽은 한글 입력 IME때문에 크게 잡음, 아래는 미구현 )
+m_editCtrl.SetMargin(5, 20, 5, 0); // 왼쪽, 오른쪽, 위, 아래 (오른쪽은 한글 입력 IME문자폭+여백)
 // 텍스트 색상 설정
 m_editCtrl.SetTextColor(RGB(180, 180, 200), RGB(28, 29, 22)); // 텍스트 색상, 배경색
 // 라인 번호 색상 설정
