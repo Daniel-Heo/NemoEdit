@@ -14,11 +14,11 @@
 //    2025.3.19   Daniel Heo  최초 생성
 //*******************************************************************************
 #pragma once
-#ifdef _DEBUG
-#define _SECURE_SCL 0
-#define _HAS_ITERATOR_DEBUGGING 0
-#define _ITERATOR_DEBUG_LEVEL 0  
-#endif
+//#ifdef _DEBUG
+//#define _SECURE_SCL 0
+//#define _HAS_ITERATOR_DEBUGGING 0
+//#define _ITERATOR_DEBUG_LEVEL 0  
+//#endif
 #include <afxwin.h>
 #include <list>
 #include <string>
@@ -242,6 +242,7 @@ private:
     void MoveCaretToNextWord();  // 다음 단어의 시작으로 이동
 	void SaveClipBoard(const std::wstring& text); // 클립보드에 텍스트 저장
 	std::wstring LoadClipText(); // 클립보드에서 텍스트 로드
+    void HideIME();
     // 찾기 / 교체
 
     // 내부 데이터

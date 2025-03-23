@@ -1,4 +1,4 @@
-//﻿*******************************************************************************
+﻿//﻿*******************************************************************************
 //    파     일     명 : NemoEdit.cpp
 //    프로그램명칭 : 네모 에디터 컨트롤
 //    프로그램용도 : 윈도우즈 MFC 기반의 텍스트 에디터 컨트롤 ( 빠르고, 대용량 가능 )
@@ -40,7 +40,7 @@ NemoEdit::NemoEdit()
 	m_selectInfo.isSelected = false;
 
 	// 색상 관련
-    m_colorInfo.text = RGB(200, 200, 200);
+    m_colorInfo.text = RGB(250, 250, 250);
     m_colorInfo.textBg = RGB(28, 29, 22);
     m_colorInfo.lineNum = RGB(140, 140, 140);
     m_colorInfo.lineNumBg = RGB(28, 29, 22);
@@ -69,15 +69,11 @@ BOOL NemoEdit::Create(DWORD dwStyle, const RECT& rect, CWnd* pParentWnd, UINT nI
                                            NULL, NULL);
     // 기본 스타일 설정 (자식 윈도우, 스크롤바 포함) - WS_CLIPCHILDREN 추가하여 자식 윈도우 영역 그리기 방지
     dwStyle |= WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL  | WS_CLIPCHILDREN;
-    BOOL res = CWnd::CreateEx(0, className, _T(""), dwStyle,
+    BOOL res = CWnd::CreateEx(WS_EX_COMPOSITED, className, _T(""), dwStyle,
                           rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
                           pParentWnd->GetSafeHwnd(), (HMENU)nID);
 
-     // IME 숨기기
-    COMPOSITIONFORM cf;
-    cf.dwStyle = CFS_CANDIDATEPOS;
-    HIMC hIMC = ImmGetContext(GetSafeHwnd());
-    ImmSetCompositionWindow(hIMC, &cf);
+    HideIME();
 
     // 키보드 입력 속도를 제일 빠르게
 	SystemParametersInfo(SPI_SETKEYBOARDDELAY, 0, NULL, 0); // 지연 속도 : 0~3 (0이 가장 빠름)
@@ -234,7 +230,7 @@ void NemoEdit::SetFont(const LOGFONT& lf) {
     m_charWidth = GetTextWidth(L"08")/2; // 공백 문자 너비로 대체
     m_nextDiffNum = 0; // numLineArea 재계산
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 폰트 변경 (기존 CFont 객체 사용)
@@ -259,7 +255,7 @@ void NemoEdit::SetLineSpacing(int spacing) {
     dc.GetTextMetrics(&tm);
     m_lineHeight = tm.tmHeight + tm.tmExternalLeading + m_lineSpacing;
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 자동 줄바꿈 설정/해제
@@ -278,14 +274,14 @@ void NemoEdit::SetWordWrap(bool enable) {
         NemoShowScrollBar(SB_HORZ, TRUE);
     }
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 라인 번호 표시 설정/해제
 void NemoEdit::ShowLineNumbers(bool show) {
     m_showLineNumbers = show;
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 읽기 전용 설정
@@ -310,27 +306,28 @@ void NemoEdit::SetMargin(int left, int right, int top, int bottom) {
 	m_margin.right = right;
 	m_margin.top = top;
 	m_margin.bottom = bottom;
-	Invalidate();
+	Invalidate(FALSE);
 }
 
 // 텍스트 색상 설정
 void NemoEdit::SetTextColor(COLORREF textColor, COLORREF bgColor) {
 	m_colorInfo.text = textColor;
 	m_colorInfo.textBg = bgColor;
-	Invalidate();
+	Invalidate(FALSE);
 }
 
 // 라인 번호 색상 설정
 void NemoEdit::SetLineNumColor(COLORREF lineNumColor, COLORREF bgColor) {
 	m_colorInfo.lineNum = lineNumColor;
 	m_colorInfo.lineNumBg = bgColor;
-	Invalidate();
+	Invalidate(FALSE);
 }
 
 // 에디터 전체 텍스트 설정
 void NemoEdit::SetText(const std::wstring& text) {
-    m_rope.clear();
-    m_nextDiffNum = 0; // numLineArea 재계산
+    // 화면 갱신 일시 중지
+    SetRedraw(FALSE);
+    ClearText();
 
     // 개행 기준으로 문자열 파싱
     std::deque<std::wstring> lines;
@@ -373,15 +370,15 @@ void NemoEdit::SetText(const std::wstring& text) {
         }
     }
 
-    m_caretPos = TextPos(0, 0);
-    m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
-
     // Undo/Redo 스택 초기화
     m_undoStack.clear();
     m_redoStack.clear();
 
+    UpdateCaretPosition(); // 케럿 초기화 적용
     RecalcScrollSizes();
-    Invalidate();
+    SetRedraw(TRUE);
+    RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    HideIME();
 }
 
 // 에디터 전체 텍스트 얻기 ('\n'으로 구분)
@@ -464,14 +461,24 @@ void NemoEdit::AddText(std::wstring text) {
     // 화면 갱신 및 커서 위치 보정
     EnsureCaretVisible();
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 void NemoEdit::ClearText() {
     m_rope.clear();
-	m_rope.insert(0, L"");
+    //m_rope.insert(0, L"");
+    m_nextDiffNum = 0; // numLineArea 재계산
+    m_caretPos = TextPos(0, 0);
+    m_scrollX = 0;
+    m_scrollYLine = 0;
+    m_scrollYWrapLine = 0;
+    m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
+    m_selectInfo.isSelected = false;
+    m_selectInfo.isSelecting = false;
+	
+    UpdateCaretPosition(); // 케럿 초기화 적용
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 선택된 텍스트 클립보드로 복사
@@ -605,7 +612,7 @@ void NemoEdit::Paste() {
     // 화면 갱신 및 커서 위치 보정
     EnsureCaretVisible();
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // Undo 실행
@@ -700,7 +707,7 @@ void NemoEdit::Undo() {
     // 화면 갱신
     EnsureCaretVisible();
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // Redo 실행
@@ -794,7 +801,7 @@ void NemoEdit::Redo() {
     // 화면 갱신
     EnsureCaretVisible();
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 커서를 위/아래로 이동시키는 통합 함수 (양수: 위로, 음수: 아래로)
@@ -1209,7 +1216,7 @@ void NemoEdit::DeleteSelection() {
 
 	EnsureCaretVisible();
     RecalcScrollSizes();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 최적화된 라인 너비 계산
@@ -1623,7 +1630,7 @@ void NemoEdit::RecalcScrollSizes() {
         clientWidth = max(0, clientWidth - numberAreaWidth);
     }
 
-    if( m_wordWrap )
+    if (m_wordWrap)
         m_wordWrapWidth = clientWidth - numberAreaWidth - m_margin.right - m_margin.left;
 
     // 스크롤 정보 구조체 초기화
@@ -1642,7 +1649,7 @@ void NemoEdit::RecalcScrollSizes() {
 
         // 수직 스크롤바 설정 - 일반 라인 수 기준으로 설정
         si.nMin = 0;
-        si.nMax = totalRealLines + visibleLines - 2;
+        si.nMax = totalRealLines + visibleLines/2 - 2;
         si.nPage = visibleLines;
         si.nPos = m_scrollYLine;
         NemoSetScrollInfo(SB_VERT, &si, TRUE);
@@ -2238,6 +2245,14 @@ std::wstring NemoEdit::LoadClipText() {
 	return std::wstring(pText);
 }
 
+void NemoEdit::HideIME() {
+    // IME 숨기기
+    COMPOSITIONFORM cf;
+    cf.dwStyle = CFS_CANDIDATEPOS;
+    HIMC hIMC = ImmGetContext(GetSafeHwnd());
+    ImmSetCompositionWindow(hIMC, &cf);
+}
+
 // 윈도우 크기 조정
 void NemoEdit::OnSize(UINT nType, int cx, int cy) {
     CWnd::OnSize(nType, cx, cy);
@@ -2290,7 +2305,7 @@ void NemoEdit::OnVScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar) {
 
     NemoSetScrollPos(SB_VERT, m_scrollYLine, TRUE);
     UpdateCaretPosition(); // 추가: 스크롤 후 캐럿 위치 업데이트
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 수평 스크롤 이벤트 처리
@@ -2316,7 +2331,7 @@ void NemoEdit::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar) {
     }
     NemoSetScrollPos(SB_HORZ, m_scrollX, TRUE);
     UpdateCaretPosition(); // 추가: 스크롤 후 캐럿 위치 업데이트
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 마우스 휠 스크롤 처리
@@ -2333,7 +2348,7 @@ BOOL NemoEdit::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt) {
 
     NemoSetScrollPos(SB_VERT, m_scrollYLine, TRUE);
 	UpdateCaretPosition();
-    Invalidate();
+    Invalidate(FALSE);
     return TRUE;
 }
 
@@ -2376,7 +2391,7 @@ void NemoEdit::OnLButtonDblClk(UINT nFlags, CPoint point)
     m_selectInfo.anchor = m_selectInfo.start;
 
     UpdateCaretPosition();
-    Invalidate();
+    Invalidate(FALSE);
 
     CWnd::OnLButtonDblClk(nFlags, point);
 }
@@ -2425,7 +2440,7 @@ void NemoEdit::OnLButtonDown(UINT nFlags, CPoint point) {
     //CreateSolidCaret(2, m_lineHeight - m_lineSpacing);
     UpdateCaretPosition();
     ShowCaret();
-    Invalidate();
+    Invalidate(FALSE);
 }
 
 // 마우스 왼쪽 버튼 떼었을 때
@@ -2475,7 +2490,7 @@ void NemoEdit::OnMouseMove(UINT nFlags, CPoint point) {
                     m_selectInfo.anchor.column == m_caretPos.column);
 
                 UpdateCaretPosition();
-                Invalidate();
+                Invalidate(FALSE);
             }
         }
         else {
@@ -2538,7 +2553,7 @@ void NemoEdit::OnMouseMove(UINT nFlags, CPoint point) {
                 }
 
                 UpdateCaretPosition();
-                Invalidate();
+                Invalidate(FALSE);
             }
         }
     }
@@ -2557,7 +2572,7 @@ void NemoEdit::OnChar(UINT nChar, UINT nRepCnt, UINT nFlags) {
         InsertChar(L' ');
         InsertChar(L' ');
         EnsureCaretVisible();
-        Invalidate();
+        Invalidate(FALSE);
         return;
     }
     if(nChar == '\r' || nChar == '\n') {
@@ -2752,7 +2767,7 @@ void NemoEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags) {
     }
 
     EnsureCaretVisible();
-    Invalidate(TRUE);
+    Invalidate(FALSE);
 }
 
 // 포커스 받았을 때 (캐럿 생성 및 표시)
@@ -2806,7 +2821,7 @@ BOOL NemoEdit::PreTranslateMessage(MSG* pMsg)
 					case 'Y': Redo(); break;
 					}
                     EnsureCaretVisible();
-                    Invalidate();
+                    Invalidate(FALSE);
                     return TRUE;
                 }
                 break;
