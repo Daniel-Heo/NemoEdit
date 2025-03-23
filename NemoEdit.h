@@ -165,7 +165,6 @@ public:
     void SetText(const std::wstring& text);
     std::wstring GetText();
     void AddText(std::wstring text);
-    void ClearText();
     void Copy();
     void Cut();
     void Paste();
@@ -243,6 +242,7 @@ private:
 	void SaveClipBoard(const std::wstring& text); // 클립보드에 텍스트 저장
 	std::wstring LoadClipText(); // 클립보드에서 텍스트 로드
     void HideIME();
+    void ClearText();
     // 찾기 / 교체
 
     // 내부 데이터

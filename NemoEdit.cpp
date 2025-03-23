@@ -466,7 +466,6 @@ void NemoEdit::AddText(std::wstring text) {
 
 void NemoEdit::ClearText() {
     m_rope.clear();
-    //m_rope.insert(0, L"");
     m_nextDiffNum = 0; // numLineArea 재계산
     m_caretPos = TextPos(0, 0);
     m_scrollX = 0;
@@ -477,8 +476,6 @@ void NemoEdit::ClearText() {
     m_selectInfo.isSelecting = false;
 	
     UpdateCaretPosition(); // 케럿 초기화 적용
-    RecalcScrollSizes();
-    Invalidate(FALSE);
 }
 
 // 선택된 텍스트 클립보드로 복사
