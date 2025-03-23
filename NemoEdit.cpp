@@ -1623,6 +1623,9 @@ void NemoEdit::RecalcScrollSizes() {
         clientWidth = max(0, clientWidth - numberAreaWidth);
     }
 
+    if( m_wordWrap )
+        m_wordWrapWidth = clientWidth - numberAreaWidth - m_margin.right - m_margin.left;
+
     // 스크롤 정보 구조체 초기화
     SCROLLINFO si;
     si.cbSize = sizeof(SCROLLINFO);
