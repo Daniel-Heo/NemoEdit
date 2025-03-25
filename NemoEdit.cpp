@@ -1622,13 +1622,8 @@ void NemoEdit::RecalcScrollSizes() {
         numberAreaWidth = CalculateNumberAreaWidth();
     }
 
-    int clientWidth = client.Width();
-    if (m_showLineNumbers) {
-        clientWidth = max(0, clientWidth - numberAreaWidth);
-    }
-
     if (m_wordWrap)
-        m_wordWrapWidth = clientWidth - numberAreaWidth - m_margin.right - m_margin.left;
+        m_wordWrapWidth = client.Width() - numberAreaWidth - m_margin.right - m_margin.left;
 
     // 스크롤 정보 구조체 초기화
     SCROLLINFO si;
@@ -1657,11 +1652,6 @@ void NemoEdit::RecalcScrollSizes() {
 
         // 최대 텍스트 폭 계산 (가로 스크롤)
         int maxWidth = GetMaxWidth();
-
-        // 라인 번호가 있으면 최대 폭에 라인 번호 영역 추가
-        if (m_showLineNumbers) {
-            maxWidth += numberAreaWidth;
-        }
 
         // 수직 스크롤바 설정
         si.nMin = 0;
