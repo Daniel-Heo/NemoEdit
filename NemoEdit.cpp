@@ -2763,6 +2763,7 @@ void NemoEdit::OnSetFocus(CWnd* pOldWnd) {
     CreateSolidCaret(2, m_lineHeight-m_lineSpacing);
     UpdateCaretPosition();
     ShowCaret();
+    HideIME();
 }
 
 // 포커스 잃었을 때 (캐럿 숨김)
