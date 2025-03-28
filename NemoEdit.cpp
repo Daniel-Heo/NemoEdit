@@ -28,7 +28,8 @@ NemoEdit::NemoEdit()
       m_lineHeight(0), m_charWidth(0),
 	  m_scrollX(0), m_scrollYLine(0), m_scrollYWrapLine(0),
       m_nextDiffNum(0),
-	  m_isUseScrollCtrl(FALSE), m_showScrollBars(FALSE)
+	  m_isUseScrollCtrl(FALSE), m_showScrollBars(FALSE),
+	  m_tabSize(4)
  {
     // 텍스트 라인 관련
     m_rope.insert(0, L"");
@@ -68,8 +69,9 @@ BOOL NemoEdit::Create(DWORD dwStyle, const RECT& rect, CWnd* pParentWnd, UINT nI
                                            ::LoadCursor(NULL, IDC_IBEAM),
                                            NULL, NULL);
     // 기본 스타일 설정 (자식 윈도우, 스크롤바 포함) - WS_CLIPCHILDREN 추가하여 자식 윈도우 영역 그리기 방지
-    dwStyle |= WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL  | WS_CLIPCHILDREN;
-    BOOL res = CWnd::CreateEx(WS_EX_COMPOSITED, className, _T(""), dwStyle,
+    dwStyle |= WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_CLIPCHILDREN;
+    dwStyle &= ~(WS_BORDER | WS_DLGFRAME); // 테두리 제거
+    BOOL res = CreateEx(WS_EX_COMPOSITED, className, _T(""), dwStyle,
                           rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
                           pParentWnd->GetSafeHwnd(), (HMENU)nID);
 
@@ -117,10 +119,7 @@ END_MESSAGE_MAP()
 
 int NemoEdit::GetLineWidth(int lineIndex) {
     std::wstring line = m_rope.getLine(lineIndex);
-
-    CClientDC dc(this);
-    dc.SelectObject(&m_font);
-    return dc.GetTextExtent(line.c_str(), line.length()).cx;
+    return GetTextWidth(line);
 }
 
 // 현재 화면에 표시되는 라인 중 가장 긴 라인의 너비를 계산
@@ -205,17 +204,7 @@ int NemoEdit::OnCreate(LPCREATESTRUCT lpCreateStruct) {
     return 0;
 }
 
-void NemoEdit::SetFont(std::wstring fontName, int fontSize, bool bold, bool italic) {
-	LOGFONT lf;
-	memset(&lf, 0, sizeof(LOGFONT));
-	wcscpy_s(lf.lfFaceName, fontName.c_str());
-	lf.lfHeight = -fontSize;
-	lf.lfWeight = bold ? FW_BOLD : FW_NORMAL;
-	lf.lfItalic = italic;
-	SetFont(lf);
-}
-
-// 폰트 변경 (LOGFONT 사용)
+// 폰트 변경 (LOGFONT 사용) : font 변경 메인 코어
 void NemoEdit::SetFont(const LOGFONT& lf) {
     m_font.DeleteObject();
     m_font.CreateFontIndirect(&lf);
@@ -227,10 +216,20 @@ void NemoEdit::SetFont(const LOGFONT& lf) {
     m_lineHeight = tm.tmHeight + tm.tmExternalLeading + m_lineSpacing;
     // 메모리 DC에도 새 폰트 선택
     m_memDC.SelectObject(&m_font);
-    m_charWidth = GetTextWidth(L"08")/2; // 공백 문자 너비로 대체
+    m_charWidth = GetTextWidth(L"080")-GetTextWidth(L"08"); // 공백 문자 너비로 대체
     m_nextDiffNum = 0; // numLineArea 재계산
     RecalcScrollSizes();
     Invalidate(FALSE);
+}
+
+void NemoEdit::SetFont(std::wstring fontName, int fontSize, bool bold, bool italic) {
+	LOGFONT lf;
+	memset(&lf, 0, sizeof(LOGFONT));
+	wcscpy_s(lf.lfFaceName, fontName.c_str());
+	lf.lfHeight = -fontSize;
+	lf.lfWeight = bold ? FW_BOLD : FW_NORMAL;
+	lf.lfItalic = italic;
+	SetFont(lf);
 }
 
 // 폰트 변경 (기존 CFont 객체 사용)
@@ -243,6 +242,10 @@ void NemoEdit::SetFont(CFont* pFont) {
         pDefaultFont->GetLogFont(&lf);
     }
     SetFont(lf);
+}
+
+void NemoEdit::SetTabSize(int size) {
+    m_tabSize = size;
 }
 
 // 추가 줄 간격 설정
@@ -476,6 +479,26 @@ void NemoEdit::ClearText() {
     m_selectInfo.isSelecting = false;
 	
     UpdateCaretPosition(); // 케럿 초기화 적용
+}
+
+// Tab 문자를 주어진 크기의 공백으로 변환하는 함수
+std::wstring NemoEdit::ExpandTabs(const std::wstring& text) {
+    // 결과를 저장할 문자열
+    std::wstring result;
+
+    // 입력 문자열을 순회하며 탭을 공백으로 변환
+    for (size_t i = 0; i < text.length(); i++) {
+        if (text[i] == L'\t') {
+            // 탭 문자 발견 시 지정된 수의 공백 추가
+            result.append(std::wstring(m_tabSize,L' '));
+        }
+        else {
+            // 일반 문자는 그대로 복사
+            result.push_back(text[i]);
+        }
+    }
+
+    return result;
 }
 
 // 선택된 텍스트 클립보드로 복사
@@ -1221,7 +1244,7 @@ int NemoEdit::GetTextWidth(const std::wstring& line) {
     return m_memDC.GetTextExtent(line.c_str(), line.length()).cx;
 }
 
-// lineIndex: 라인 인덱스
+// lineIndex: 라인 인덱스 - 다음줄이 시작되는 column의 위치들이 데이터에 저장
 std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
     std::vector<int> wrapPos;
 
@@ -1237,18 +1260,21 @@ std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
 
     int currentPos = 0;
     int currWidthSum = 0;
+    std::wstring tabText;
+    int low, high, result, currWidth, mid, testSize;
     while (currentPos < (int)lineText.length()) {
         // 이진 검색으로 현재 위치에서 가장 텍스트 찾기
-        int low = 1;
-        int high = lineText.length() - currentPos;
-        int result = 1; // 기본값
-        int currWidth = 0;
+        low = 1;
+        high = lineText.length() - currentPos;
+        result = 1; // 기본값
+        currWidth = 0;
 
         while (low <= high) {
-            int mid = (low + high) / 2;
+            mid = (low + high) / 2;
             if (mid <= 0) mid = 1; // 보호 코드
 
-            int testSize = GetTextWidth(lineText.substr(currentPos, mid));
+            tabText = ExpandTabs(lineText.substr(currentPos, mid));
+            testSize = GetTextWidth(tabText);
 
             if (testSize < m_wordWrapWidth) {
                 currWidth = testSize;
@@ -1344,6 +1370,7 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
 			}
             else {
                 std::wstring text = line.substr(startCol, pos.column - startCol);
+                text = ExpandTabs(text);
                 pt.x = GetTextWidth(text);
             }
         }
@@ -1361,6 +1388,7 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
         if (!line.empty()) {
             if (pos.column > 0) {
                 std::wstring text = line.substr(0, pos.column);
+                text = ExpandTabs(text);
                 pt.x = GetTextWidth(text);
             }
             else {
@@ -1470,7 +1498,7 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
             CSize extent;
             for (col = 0; col < (int)lineText.size(); ++col) {
                 std::wstring text = lineText.substr(0, col + 1);
-                extent = m_memDC.GetTextExtent(text.c_str(), text.length());
+                extent = GetTextWidth(text.c_str());
                 if (extent.cx > x) break;
             }
             pos.column = col;
@@ -1775,7 +1803,7 @@ void NemoEdit::DrawLineNo(int lineIndex, int yPos) {
     CString numStr;
     CSize numSize;
     numStr.Format(_T("%d"), lineIndex + 1);
-    numSize = m_memDC.GetTextExtent(numStr);
+    numSize = GetTextWidth(numStr.GetString());
     int xPos = numAreaWidth - numSize.cx - 10;
     m_memDC.TextOut(xPos, yPos, numStr);
 
@@ -1804,8 +1832,8 @@ void NemoEdit::OnPaint() {
     // 배경 색으로 채우기
     m_memDC.FillSolidRect(client, m_colorInfo.textBg);
     m_memDC.SelectObject(&m_font);
-    m_memDC.SetBkMode(TRANSPARENT);
     m_memDC.SetTextColor(m_colorInfo.text);
+    m_memDC.SetBkMode(TRANSPARENT);
 
     // 라인 번호 영역 그리기
     int numberAreaWidth = 0;
@@ -1836,6 +1864,7 @@ void NemoEdit::OnPaint() {
                 preText += lineStr.substr(m_caretPos.column);
                 lineStr = preText;
             }
+			lineStr = ExpandTabs(lineStr);
 
             std::vector<int> wrapPositions = FindWordWrapPosition(lineIndex);
 
@@ -1898,6 +1927,7 @@ void NemoEdit::OnPaint() {
 
         while ( lineIndex< maxLine && y < client.Height()) {
             lineStr = m_rope.getLine(lineIndex);
+            lineStr = ExpandTabs(lineStr);
             // 수평 클리핑 최적화 (화면 밖에 있는 텍스트는 그리지 않음)
             int lineWidth = GetLineWidth(lineIndex);
             if (numberAreaWidth - m_scrollX + lineWidth <= 0) {
@@ -1960,7 +1990,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
     int x = xOffset - m_scrollX+m_margin.left;
 
     // 텍스트의 전체 너비 계산
-    CSize textSize = m_memDC.GetTextExtent(segText.c_str(), segText.length());
+    CSize textSize = GetTextWidth(segText.c_str());
 
     // 수평 클리핑 (화면 밖에 있는 텍스트는 그리지 않음)
     if (x + textSize.cx <= 0 || x >= client.Width()) {
@@ -2034,7 +2064,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         // 선택 전 부분 출력 (클리핑 처리)
         if (relSelStart > 0) {
             std::wstring preText = segText.substr(0, relSelStart);
-            CSize preSize = m_memDC.GetTextExtent(preText.c_str(), preText.length());
+            CSize preSize = GetTextWidth(preText.c_str());
 
             if (x + preSize.cx > 0 && x < client.Width()) {
                 m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &clipRect,
@@ -2046,7 +2076,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         // 선택된 부분 출력 (클리핑 처리)
         if (relSelEnd > relSelStart) {
             std::wstring selText = segText.substr(relSelStart, relSelEnd - relSelStart);
-            CSize selSize = m_memDC.GetTextExtent(selText.c_str(), selText.length());
+            CSize selSize = GetTextWidth(selText.c_str());
 
             if (x + selSize.cx > 0 && x < client.Width()) {
                 COLORREF oldTextColor = m_memDC.GetTextColor();
@@ -2071,7 +2101,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         // 선택 후 남은 부분 출력 (클리핑 처리)
         if (relSelEnd < segText.size()) {
             std::wstring postText = segText.substr(relSelEnd);
-            CSize postSize = m_memDC.GetTextExtent(postText.c_str(), postText.length());
+            CSize postSize = GetTextWidth(postText.c_str());
 
             if (x < client.Width() && x + postSize.cx > 0) {
                 CRect postClipRect(max(0, x), y, min(client.Width(), x + postSize.cx), y + m_lineHeight);
@@ -2245,9 +2275,6 @@ void NemoEdit::OnSize(UINT nType, int cx, int cy) {
     CWnd::OnSize(nType, cx, cy);
     if (cx <= 0 || cy <= 0) return;
 
-    // 스크롤 크기 재계산
-    RecalcScrollSizes();
-
     // 메모리 DC 비트맵 재설정
     CClientDC dc(this);
 
@@ -2259,7 +2286,7 @@ void NemoEdit::OnSize(UINT nType, int cx, int cy) {
     // 메모리 크기 갱신
     m_memSize = CSize(cx, cy);
 
-    // 화면 갱신 요청
+    RecalcScrollSizes(); // 스크롤 크기 재계산
     Invalidate(FALSE);
 }
 
@@ -2504,7 +2531,7 @@ void NemoEdit::OnMouseMove(UINT nFlags, CPoint point) {
                 int low = 0, high = (int)lineText.size();
                 while (low <= high) {
                     int mid = (low + high) / 2;
-                    CSize sz = m_memDC.GetTextExtent(lineText.c_str(), mid);
+                    CSize sz = GetTextWidth(lineText.substr(0,mid).c_str());
                     if (sz.cx <= textX) {
                         newColIndex = mid;
                         low = mid + 1;
@@ -2554,10 +2581,7 @@ void NemoEdit::OnChar(UINT nChar, UINT nRepCnt, UINT nFlags) {
     }
     if(nChar == '\t') {
         // Tab 입력: 4칸 공백 삽입
-        InsertChar(L' ');
-        InsertChar(L' ');
-        InsertChar(L' ');
-        InsertChar(L' ');
+        InsertChar(L'\t');
         EnsureCaretVisible();
         Invalidate(FALSE);
         return;

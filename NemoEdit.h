@@ -153,6 +153,7 @@ public:
 	void SetFont(std::wstring fontName, int fontSize, bool bold, bool italic);
     void SetFont(const LOGFONT& lf);
     void SetFont(CFont* pFont);
+    void SetTabSize(int size);
     void SetLineSpacing(int spacing);
     void SetWordWrap(bool enable);
     void ShowLineNumbers(bool show);
@@ -243,6 +244,7 @@ private:
 	std::wstring LoadClipText(); // 클립보드에서 텍스트 로드
     void HideIME();
     void ClearText();
+    std::wstring ExpandTabs(const std::wstring& text); // \t을 space * tabSize로 치환
     // 찾기 / 교체
 
     // 내부 데이터
@@ -262,6 +264,7 @@ private:
     bool m_showLineNumbers;       // 라인 번호 표시 여부
     int m_wordWrapWidth;           // WordWrap : 한 줄의 최대 너비 (픽셀, 0이면 제한 없음)
     int m_lineSpacing;            // 추가 줄 간격 (픽셀)
+    int m_tabSize; // 탭 사이즈 ( space bar width 기준 ) : space width*m_tabSize = 최종 tab width
 	
     // 여백
 	Margin       m_margin;              // 여백 : 오른쪽만 구현
