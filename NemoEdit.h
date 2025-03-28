@@ -265,6 +265,7 @@ private:
     int m_wordWrapWidth;           // WordWrap : 한 줄의 최대 너비 (픽셀, 0이면 제한 없음)
     int m_lineSpacing;            // 추가 줄 간격 (픽셀)
     int m_tabSize; // 탭 사이즈 ( space bar width 기준 ) : space width*m_tabSize = 최종 tab width
+    int m_maxWidth; // 현재 문서의 라인 최대 사이즈
 	
     // 여백
 	Margin       m_margin;              // 여백 : 오른쪽만 구현

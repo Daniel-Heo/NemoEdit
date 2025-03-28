@@ -29,7 +29,7 @@ NemoEdit::NemoEdit()
 	  m_scrollX(0), m_scrollYLine(0), m_scrollYWrapLine(0),
       m_nextDiffNum(0),
 	  m_isUseScrollCtrl(FALSE), m_showScrollBars(FALSE),
-	  m_tabSize(4)
+	  m_tabSize(4), m_maxWidth(0)
  {
     // 텍스트 라인 관련
     m_rope.insert(0, L"");
@@ -119,13 +119,12 @@ END_MESSAGE_MAP()
 
 int NemoEdit::GetLineWidth(int lineIndex) {
     std::wstring line = m_rope.getLine(lineIndex);
+    line = ExpandTabs(line);
     return GetTextWidth(line);
 }
 
 // 현재 화면에 표시되는 라인 중 가장 긴 라인의 너비를 계산
 int NemoEdit::GetMaxWidth() {
-    int maxWidth = 0;
-
     CRect client;
     GetClientRect(&client);
     int visibleLines =( client.Height()-m_margin.top-m_margin.bottom) / m_lineHeight;
@@ -142,12 +141,12 @@ int NemoEdit::GetMaxWidth() {
     // 화면에 보이는 라인들만 계산
     for (int i = startLine; i <= endLine; i++) {
         int lineWidth = GetLineWidth(i);
-        if (lineWidth > maxWidth) {
-            maxWidth = lineWidth;
+        if (lineWidth > m_maxWidth) {
+            m_maxWidth = lineWidth;
         }
     }
 
-    return maxWidth;
+    return m_maxWidth;
 }
 
 // 라인 번호 영역 너비 계산
@@ -373,6 +372,8 @@ void NemoEdit::SetText(const std::wstring& text) {
         }
     }
 
+    // 최대 라인 사이즈 초기화
+    m_maxWidth = 0;
     // Undo/Redo 스택 초기화
     m_undoStack.clear();
     m_redoStack.clear();
@@ -484,13 +485,13 @@ void NemoEdit::ClearText() {
 // Tab 문자를 주어진 크기의 공백으로 변환하는 함수
 std::wstring NemoEdit::ExpandTabs(const std::wstring& text) {
     // 결과를 저장할 문자열
-    std::wstring result;
+    std::wstring result = L"";
 
     // 입력 문자열을 순회하며 탭을 공백으로 변환
     for (size_t i = 0; i < text.length(); i++) {
         if (text[i] == L'\t') {
             // 탭 문자 발견 시 지정된 수의 공백 추가
-            result.append(std::wstring(m_tabSize,L' '));
+            result.append(std::wstring(m_tabSize, L' '));
         }
         else {
             // 일반 문자는 그대로 복사
@@ -1449,19 +1450,22 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
 
         // 수평 위치 계산
         std::wstring lineText = m_rope.getLine(pos.lineIndex);
+        std::wstring tabText;
         int col = 0;
+        int low, high, result, pointX, mid, testSize;
         if (!lineText.empty()) {
             // 이진 검색으로 텍스트에서 현재 위치 찾기
-            int low = 1;
-            int high = lineText.size() - startCol;
-            int result = 0; // 기본값
-            int pointX = pt.x - CalculateNumberAreaWidth()-m_margin.left;
+            low = 1;
+            high = lineText.size() - startCol;
+            result = 0; // 기본값
+            pointX = pt.x - CalculateNumberAreaWidth()-m_margin.left;
 
             while (low <= high) {
-                int mid = (low + high) / 2;
+                mid = (low + high) / 2;
                 if (mid <= 0) mid = 1; // 보호 코드
 
-                int testSize = GetTextWidth(lineText.substr(startCol, mid));
+                tabText = ExpandTabs(lineText.substr(startCol, mid));
+                testSize = GetTextWidth(tabText);
 
                 if (testSize < pointX) {
                     // 더 많은 텍스트를 포함할 수 있음
@@ -1498,6 +1502,7 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
             CSize extent;
             for (col = 0; col < (int)lineText.size(); ++col) {
                 std::wstring text = lineText.substr(0, col + 1);
+                text = ExpandTabs(text);
                 extent = GetTextWidth(text.c_str());
                 if (extent.cx > x) break;
             }
@@ -1864,7 +1869,6 @@ void NemoEdit::OnPaint() {
                 preText += lineStr.substr(m_caretPos.column);
                 lineStr = preText;
             }
-			lineStr = ExpandTabs(lineStr);
 
             std::vector<int> wrapPositions = FindWordWrapPosition(lineIndex);
 
@@ -1927,7 +1931,6 @@ void NemoEdit::OnPaint() {
 
         while ( lineIndex< maxLine && y < client.Height()) {
             lineStr = m_rope.getLine(lineIndex);
-            lineStr = ExpandTabs(lineStr);
             // 수평 클리핑 최적화 (화면 밖에 있는 텍스트는 그리지 않음)
             int lineWidth = GetLineWidth(lineIndex);
             if (numberAreaWidth - m_scrollX + lineWidth <= 0) {
@@ -1978,7 +1981,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
     }
 
 	std::wstring segText = segment;
-
+    std::wstring tabText = ExpandTabs(segText);
     CRect client;
     GetClientRect(&client);
 
@@ -1990,7 +1993,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
     int x = xOffset - m_scrollX+m_margin.left;
 
     // 텍스트의 전체 너비 계산
-    CSize textSize = GetTextWidth(segText.c_str());
+    CSize textSize = GetTextWidth(tabText.c_str());
 
     // 수평 클리핑 (화면 밖에 있는 텍스트는 그리지 않음)
     if (x + textSize.cx <= 0 || x >= client.Width()) {
@@ -2045,7 +2048,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
             // 선택 부분이 이 세그먼트에 겹치지 않음 - 최적화된 그리기
             UINT textOutOptions = ETO_CLIPPED;
             m_memDC.ExtTextOut(x, y, textOutOptions, &clipRect,
-                segText.c_str(), segText.size(), NULL);
+                tabText.c_str(), tabText.size(), NULL);
             return;
         }
 
@@ -2064,11 +2067,12 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         // 선택 전 부분 출력 (클리핑 처리)
         if (relSelStart > 0) {
             std::wstring preText = segText.substr(0, relSelStart);
-            CSize preSize = GetTextWidth(preText.c_str());
+            tabText = ExpandTabs(preText);
+            CSize preSize = GetTextWidth(tabText.c_str());
 
             if (x + preSize.cx > 0 && x < client.Width()) {
                 m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &clipRect,
-                    preText.c_str(), preText.length(), NULL);
+                    tabText.c_str(), tabText.length(), NULL);
             }
             x += preSize.cx;
         }
@@ -2076,7 +2080,8 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         // 선택된 부분 출력 (클리핑 처리)
         if (relSelEnd > relSelStart) {
             std::wstring selText = segText.substr(relSelStart, relSelEnd - relSelStart);
-            CSize selSize = GetTextWidth(selText.c_str());
+            tabText = ExpandTabs(selText);
+            CSize selSize = GetTextWidth(tabText.c_str());
 
             if (x + selSize.cx > 0 && x < client.Width()) {
                 COLORREF oldTextColor = m_memDC.GetTextColor();
@@ -2091,7 +2096,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
                     m_memDC.FillSolidRect(visibleSelRect, ::GetSysColor(COLOR_HIGHLIGHT));
                     m_memDC.SetTextColor(::GetSysColor(COLOR_HIGHLIGHTTEXT));
                     m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &visibleSelRect,
-                        selText.c_str(), selText.length(), NULL);
+                        tabText.c_str(), tabText.length(), NULL);
                     m_memDC.SetTextColor(oldTextColor);
                 }
             }
@@ -2101,13 +2106,14 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         // 선택 후 남은 부분 출력 (클리핑 처리)
         if (relSelEnd < segText.size()) {
             std::wstring postText = segText.substr(relSelEnd);
-            CSize postSize = GetTextWidth(postText.c_str());
+            tabText = ExpandTabs(postText);
+            CSize postSize = GetTextWidth(tabText.c_str());
 
             if (x < client.Width() && x + postSize.cx > 0) {
                 CRect postClipRect(max(0, x), y, min(client.Width(), x + postSize.cx), y + m_lineHeight);
                 m_memDC.SetBkColor(m_colorInfo.textBg);
                 m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &clipRect,
-                    postText.c_str(), postText.length(), NULL);
+                    tabText.c_str(), tabText.length(), NULL);
             }
         }
     }
@@ -2116,7 +2122,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         UINT textOutOptions = ETO_CLIPPED;
         m_memDC.SetBkColor(m_colorInfo.textBg);
         m_memDC.ExtTextOut(x, y, textOutOptions, &clipRect,
-            segText.c_str(), segText.length(), NULL);
+            tabText.c_str(), tabText.length(), NULL);
     }
 }
 
