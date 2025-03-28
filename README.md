@@ -49,7 +49,7 @@ m_editCtrl.AddText(L"이것은 추가된 텍스트입니다.\n");
 // 에디터 텍스트 가져오기
 text = m_editCtrl.GetText();
 
-// 폰트 설정
+// 폰트 설정 : 폰트 크기는 짝수로 해주셔야합니다. 홀수일 경우에 tab만 선택 시 선택영역이 줄어듭니다.
 m_editCtrl.SetFont(L"Noto Sans Kr", 16, true, false); // 글꼴, 크기, 볼드, 이탤릭
 // 라인 여백 설정
 m_editCtrl.SetLineSpacing(5); // 5픽셀 추가 여백
