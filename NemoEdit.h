@@ -30,6 +30,7 @@
 #include <functional>
 #include <optional>
 #include <stack>
+#include <algorithm>
 
 #define SPLIT_THRESHOLD         2000
 #define MERGE_THRESHOLD     1000
@@ -85,7 +86,7 @@ public:
     void insert(size_t lineIndex, const std::wstring& text);
     void insertAt(size_t lineIndex, size_t offset, const std::wstring& text);
     void insertBack(const std::wstring& text);
-    void insertMultiple(size_t lineIndex, const std::deque<std::wstring>& newLines);
+    void insertMultiple(size_t lineIndex, std::list<std::wstring>& newLines);
     void erase(size_t lineIndex);
     void eraseAt(size_t lineIndex, size_t offset, size_t size);
     void eraseRange(size_t startLine, size_t endLine);

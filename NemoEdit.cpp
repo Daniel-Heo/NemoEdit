@@ -217,6 +217,7 @@ void NemoEdit::SetFont(const LOGFONT& lf) {
     m_memDC.SelectObject(&m_font);
     m_charWidth = GetTextWidth(L"080")-GetTextWidth(L"08"); // 공백 문자 너비로 대체
     m_nextDiffNum = 0; // numLineArea 재계산
+    CreateSolidCaret(2, m_lineHeight - m_lineSpacing);
     RecalcScrollSizes();
     Invalidate(FALSE);
 }
@@ -282,6 +283,7 @@ void NemoEdit::SetWordWrap(bool enable) {
 // 라인 번호 표시 설정/해제
 void NemoEdit::ShowLineNumbers(bool show) {
     m_showLineNumbers = show;
+    EnsureCaretVisible();
     RecalcScrollSizes();
     Invalidate(FALSE);
 }
@@ -332,29 +334,33 @@ void NemoEdit::SetText(const std::wstring& text) {
     ClearText();
 
     // 개행 기준으로 문자열 파싱
-    std::deque<std::wstring> lines;
-    size_t pos = 0;
+    std::list<std::wstring> lines;
+    const wchar_t* start = text.c_str();
+    const wchar_t* end = start + text.size();
+    const wchar_t* lineStart = start;
+    size_t lineLength;
 
-    while (pos < text.size()) {
-        size_t nlPos = text.find(L'\n', pos);
-        std::wstring line;
+    for (const wchar_t* p = start; p < end; ++p) {
+        if (*p == L'\n') {
+            // 개행 발견 시 현재까지의 문자열을 한번에 생성
+            lineLength = p - lineStart;
+            if (p > lineStart && *(p - 1) == L'\r') {
+                lineLength--; // CR 제거
+            }
 
-        if (nlPos == std::wstring::npos) {
-            line = text.substr(pos);
-            if (!line.empty() && line.back() == L'\r') {
-                line.pop_back();  // CR 제거
+            lines.emplace_back(lineStart, lineLength);
+            lineStart = p + 1;
             }
-            lines.push_back(line);
-            break;
         }
-        else {
-            line = text.substr(pos, nlPos - pos);
-            if (!line.empty() && line.back() == L'\r') {
-                line.pop_back();
-            }
-            lines.push_back(line);
-            pos = nlPos + 1;
-        }
+
+    // 마지막 라인 처리
+    if (lineStart < end) {
+        lineLength = end - lineStart;
+        lines.emplace_back(lineStart, lineLength);
+    }
+    else if (end > start && *(end - 1) == L'\n') {
+        // 파일이 개행으로 끝나면 빈 라인 추가
+        lines.emplace_back();
     }
 
     if (lines.empty()) {
@@ -398,12 +404,12 @@ void NemoEdit::AddText(std::wstring text) {
     }
 
     // 개행 기준으로 문자열 파싱
-    std::deque<std::wstring> lines;
+    std::list<std::wstring> lines;
     size_t pos = 0;
-
-    while (pos < text.size()) {
-        size_t nlPos = text.find(L'\n', pos);
+    size_t nlPos;
         std::wstring line;
+    while (pos < text.size()) {
+        nlPos = text.find(L'\n', pos);
 
         if (nlPos == std::wstring::npos) {
             line = text.substr(pos);
@@ -437,6 +443,8 @@ void NemoEdit::AddText(std::wstring text) {
     rec.start = TextPos(insertIndex, 0);
     rec.text = text;  // 원본 텍스트 그대로 저장
 
+    int endColumn = lines.back().length(); // lines가 insert 후에 사라지기 때문에 그전에 값을 얻어놓음.
+
     // SPLIT_THRESHOLD 값을 넘는 경우 insertMultiple 사용
     if (lines.size() > SPLIT_THRESHOLD) {
         m_rope.insertMultiple(insertIndex, lines);
@@ -451,7 +459,7 @@ void NemoEdit::AddText(std::wstring text) {
     // 캐럿 위치 갱신 - 추가된 텍스트의 마지막 위치로
     insertIndex = m_rope.getSize() - 1;
     m_caretPos.lineIndex = insertIndex;
-    m_caretPos.column = lines.back().length();
+    m_caretPos.column = endColumn;
 
     // 선택 영역 초기화
     m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
@@ -574,7 +582,7 @@ void NemoEdit::Paste() {
     rec.text = clipText;  // 원본 텍스트 그대로 저장 (줄바꿈 포함)
 
     // 텍스트를 줄바꿈으로 분리
-    std::deque<std::wstring> lines;
+    std::list<std::wstring> lines;
     size_t start = 0, pos;
     while ((pos = clipText.find(L'\n', start)) != std::wstring::npos) {
         lines.push_back(clipText.substr(start, pos - start));
@@ -600,6 +608,9 @@ void NemoEdit::Paste() {
     // 첫번째 라인 처리
     m_rope.update(insertPos.lineIndex, lines.front());
 
+    int lineSize = lines.size();
+    int endColum = lines.back().length() - tail.length();
+
     bool isMultiline = false;
     if (lines.size() > SPLIT_THRESHOLD) {
 		isMultiline = true;
@@ -610,21 +621,24 @@ void NemoEdit::Paste() {
         }
     }
     else {
-        // 나머지 라인들은 개별적으로 삽입
-        for (size_t i = 1; i < lines.size(); i++) {
-            m_rope.insert(insertPos.lineIndex + i, lines[i]);
+        auto it = lines.begin();
+        if (!lines.empty()) ++it;
+        for (size_t i = 1; i < lines.size(); ++it, ++i) {
+            if (it != lines.end()) {
+                m_rope.insert(insertPos.lineIndex + i, *it);
+            }
         }
     }
 
     // 캐럿 위치 갱신
 	if (lines.size() > 1) { // 여러 라인 삽입
-		if (isMultiline) m_caretPos.lineIndex = insertPos.lineIndex + lines.size(); // pop_front 했으므로 +1
-		else m_caretPos.lineIndex = insertPos.lineIndex + lines.size() - 1;
+		if (isMultiline) m_caretPos.lineIndex = insertPos.lineIndex + lineSize; // pop_front 했으므로 +1
+		else m_caretPos.lineIndex = insertPos.lineIndex + lineSize - 1;
     }
 	else { // 단일 라인 삽입
         m_caretPos.lineIndex = insertPos.lineIndex;
     }
-    m_caretPos.column = lines.back().length() - tail.length();
+    m_caretPos.column = endColum;
 
     // Undo/Redo 스택 갱신 - 하나의 작업으로 기록
     m_undoStack.push_back(rec);
@@ -2625,9 +2639,20 @@ void NemoEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags) {
         case VK_END:
         case VK_PRIOR:
         case VK_NEXT:
+        case VK_ESCAPE:
             break; // 네비게이션 키 허용
         default:
             return; // 다른 키는 무시
+        }
+    }
+
+    // ESC 키 처리 - 선택 영역이 있으면 취소
+    if (nChar == VK_ESCAPE) {
+        if (m_selectInfo.isSelected) {
+            CancelSelection();
+            EnsureCaretVisible();
+            Invalidate(FALSE);
+            return;
         }
     }
 
@@ -3408,7 +3433,6 @@ void Rope::balanceRope() {
 
     // 새로운 균형 잡힌 트리 구축
     RopeNode* newRoot = buildBalancedTree(leaves, 0, leaves.size() - 1);
-    //RopeNode* newRoot = buildBalancedTreeBottomUp(leaves);
     if (!newRoot) {
         std::cerr << "오류: buildBalancedTree가 새로운 트리를 생성하지 못함!" << std::endl;
         exit(1);
@@ -3426,7 +3450,7 @@ void Rope::balanceRope() {
     updateNodeLengths(root);
 }
 
-void Rope::insertMultiple(size_t lineIndex, const std::deque<std::wstring>& newLines) {
+void Rope::insertMultiple(size_t lineIndex, std::list<std::wstring>& newLines) {
     if (!root) return;
     bool isEnd = false;
     int insertIndex = lineIndex;
@@ -3462,21 +3486,15 @@ void Rope::insertMultiple(size_t lineIndex, const std::deque<std::wstring>& newL
 
     // 데이터 만들기 : lines, leafNode
     std::list<RopeNode*> newLeafNodes;
-    std::list<std::wstring> tempLines;
 
     RopeNode* addLeaf = new RopeNode();
     addLeaf->isLeaf = true;
     addLeaf->length = 0;
     addLeaf->left = addLeaf->right = addLeaf->parent = nullptr;
 
-    for (const auto& line : newLines) {
-        // 새 라인을 실제 라인 컬렉션에 추가
-        tempLines.push_back(line);
-        auto lineIter = tempLines.end();
-        --lineIter; // 마지막 요소의 반복자
-
+    for (auto it = newLines.begin(); it != newLines.end(); ++it) {
         // 현재 리프 노드에 라인 추가
-        addLeaf->data.push_back(lineIter);
+        addLeaf->data.push_back(it);
         addLeaf->length++;
 
         // 현재 리프 노드가 가득 찼는지 확인
@@ -3499,12 +3517,12 @@ void Rope::insertMultiple(size_t lineIndex, const std::deque<std::wstring>& newL
 
     // 데이터 붙이기
     if (isEnd) {
-        lines.splice(lines.end(), tempLines);
+        lines.splice(lines.end(), newLines);
         leaves.splice(leaves.end(), newLeafNodes);
     }
     else {
-        if (insertPos != lines.end()) lines.splice(insertPos, tempLines);
-        else lines.splice(lines.end(), tempLines);
+        if (insertPos != lines.end()) lines.splice(insertPos, newLines);
+        else lines.splice(lines.end(), newLines);
 
         bool isFound = false;
         if (!divLeaf) {
