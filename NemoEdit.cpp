@@ -73,7 +73,7 @@ BOOL NemoEdit::Create(DWORD dwStyle, const RECT& rect, CWnd* pParentWnd, UINT nI
     dwStyle &= ~(WS_BORDER | WS_DLGFRAME); // 테두리 제거
     BOOL res = CreateEx(WS_EX_COMPOSITED, className, _T(""), dwStyle,
                           rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
-                          pParentWnd->GetSafeHwnd(), (HMENU)nID);
+                          pParentWnd->GetSafeHwnd(), (HMENU)(UINT_PTR)nID);
 
     HideIME();
 
@@ -204,7 +204,7 @@ int NemoEdit::OnCreate(LPCREATESTRUCT lpCreateStruct) {
 }
 
 // 폰트 변경 (LOGFONT 사용) : font 변경 메인 코어
-void NemoEdit::SetFont(const LOGFONT& lf) {
+void NemoEdit::SetFont(LOGFONT& lf) {
     m_font.DeleteObject();
     m_font.CreateFontIndirect(&lf);
     // 폰트 메트릭 갱신
@@ -246,6 +246,8 @@ void NemoEdit::SetFont(CFont* pFont) {
 
 void NemoEdit::SetTabSize(int size) {
     m_tabSize = size;
+    RecalcScrollSizes();
+    Invalidate(FALSE);
 }
 
 // 추가 줄 간격 설정
@@ -435,7 +437,7 @@ void NemoEdit::AddText(std::wstring text) {
     }
 
     // 추가 위치는 마지막 라인 다음 (마지막 라인의 인덱스 + 1)
-    size_t insertIndex = m_rope.getSize();
+    int insertIndex = (int)m_rope.getSize();
 
     // Undo 레코드 준비
     UndoRecord rec;
@@ -443,7 +445,7 @@ void NemoEdit::AddText(std::wstring text) {
     rec.start = TextPos(insertIndex, 0);
     rec.text = text;  // 원본 텍스트 그대로 저장
 
-    int endColumn = lines.back().length(); // lines가 insert 후에 사라지기 때문에 그전에 값을 얻어놓음.
+    size_t endColumn = lines.back().length(); // lines가 insert 후에 사라지기 때문에 그전에 값을 얻어놓음.
 
     // SPLIT_THRESHOLD 값을 넘는 경우 insertMultiple 사용
     if (lines.size() > SPLIT_THRESHOLD) {
@@ -457,9 +459,9 @@ void NemoEdit::AddText(std::wstring text) {
     }
 
     // 캐럿 위치 갱신 - 추가된 텍스트의 마지막 위치로
-    insertIndex = m_rope.getSize() - 1;
+    insertIndex = (int)m_rope.getSize() - 1;
     m_caretPos.lineIndex = insertIndex;
-    m_caretPos.column = endColumn;
+    m_caretPos.column = (int)endColumn;
 
     // 선택 영역 초기화
     m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
@@ -544,7 +546,7 @@ void NemoEdit::Cut() {
         // 선택 영역 삭제 (DeleteSelection 함수는 이미 Undo 처리를 포함하고 있음)
         DeleteSelection();
     }
-    catch (std::exception& e) {
+    catch (...) {
         // 예외 처리: 메모리 부족 등의 오류 발생 시
         MessageBeep(MB_ICONERROR);
     }
@@ -608,8 +610,8 @@ void NemoEdit::Paste() {
     // 첫번째 라인 처리
     m_rope.update(insertPos.lineIndex, lines.front());
 
-    int lineSize = lines.size();
-    int endColum = lines.back().length() - tail.length();
+    size_t lineSize = lines.size();
+    size_t endColum = lines.back().length() - tail.length();
 
     bool isMultiline = false;
     if (lines.size() > SPLIT_THRESHOLD) {
@@ -632,13 +634,13 @@ void NemoEdit::Paste() {
 
     // 캐럿 위치 갱신
 	if (lines.size() > 1) { // 여러 라인 삽입
-		if (isMultiline) m_caretPos.lineIndex = insertPos.lineIndex + lineSize; // pop_front 했으므로 +1
-		else m_caretPos.lineIndex = insertPos.lineIndex + lineSize - 1;
+		if (isMultiline) m_caretPos.lineIndex = insertPos.lineIndex + (int)lineSize; // pop_front 했으므로 +1
+		else m_caretPos.lineIndex = insertPos.lineIndex + (int)lineSize - 1;
     }
 	else { // 단일 라인 삽입
         m_caretPos.lineIndex = insertPos.lineIndex;
     }
-    m_caretPos.column = endColum;
+    m_caretPos.column = (int)endColum;
 
     // Undo/Redo 스택 갱신 - 하나의 작업으로 기록
     m_undoStack.push_back(rec);
@@ -679,7 +681,7 @@ void NemoEdit::Undo() {
             std::wstring originalLine = m_rope.getLine(rec.start.lineIndex).substr(0, rec.start.column);
 
             // 마지막 라인의 꼬리 부분 저장
-            int lastLineIdx = rec.start.lineIndex + parts.size() - 1;
+            int lastLineIdx = rec.start.lineIndex + (int)parts.size() - 1;
             std::wstring lastLineTail;
             if (lastLineIdx < static_cast<int>(m_rope.getSize())) {
                 std::wstring lastLine = m_rope.getLine(lastLineIdx);
@@ -706,7 +708,7 @@ void NemoEdit::Undo() {
         if (parts.size() == 1) {
             m_rope.insertAt(rec.start.lineIndex, rec.start.column, parts[0]);
             // 캐럿 위치 조정
-            m_caretPos.column = rec.start.column + parts[0].length();
+            m_caretPos.column = rec.start.column + (int)parts[0].length();
         }
         // 여러 라인 텍스트 복원
         else if (parts.size() > 1) {
@@ -731,8 +733,8 @@ void NemoEdit::Undo() {
             }
 
             // 캐럿 위치 조정
-            m_caretPos.lineIndex = rec.start.lineIndex + parts.size() - 1;
-            m_caretPos.column = parts.back().length();
+            m_caretPos.lineIndex = rec.start.lineIndex + (int)parts.size() - 1;
+            m_caretPos.column = (int)parts.back().length();
         }
     }
 
@@ -767,7 +769,7 @@ void NemoEdit::Redo() {
         if (parts.size() == 1) {
             m_rope.insertAt(rec.start.lineIndex, rec.start.column, parts[0]);
             // 캐럿 위치 조정
-            m_caretPos.column = rec.start.column + parts[0].length();
+            m_caretPos.column = rec.start.column + (int)parts[0].length();
         }
         // 여러 라인 삽입
         else if (parts.size() > 1) {
@@ -792,8 +794,8 @@ void NemoEdit::Redo() {
             }
 
             // 캐럿 위치 조정
-            m_caretPos.lineIndex = rec.start.lineIndex + parts.size() - 1;
-            m_caretPos.column = parts.back().length();
+            m_caretPos.lineIndex = rec.start.lineIndex + (int)parts.size() - 1;
+            m_caretPos.column = (int)parts.back().length();
         }
     }
     else if (rec.type == UndoRecord::Delete) {
@@ -811,7 +813,7 @@ void NemoEdit::Redo() {
             std::wstring originalLine = m_rope.getLine(rec.start.lineIndex).substr(0, rec.start.column);
 
             // 마지막 라인의 꼬리 부분 저장
-            int lastLineIdx = rec.start.lineIndex + parts.size() - 1;
+            int lastLineIdx = rec.start.lineIndex + (int)parts.size() - 1;
             std::wstring lastLineTail;
             if (lastLineIdx < static_cast<int>(m_rope.getSize())) {
                 std::wstring lastLine = m_rope.getLine(lastLineIdx);
@@ -979,7 +981,7 @@ void NemoEdit::UpDown(int step) {
                 if (m_caretPos.lineIndex > 0) {
                     m_caretPos.lineIndex--;
                     int desiredCol = oldPos.column;
-                    int lineSize = m_rope.getLineSize(m_caretPos.lineIndex);
+                    int lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
                     if (m_caretPos.lineIndex<m_rope.getSize() && desiredCol >lineSize) {
                         desiredCol = lineSize;
                     }
@@ -1000,7 +1002,7 @@ void NemoEdit::UpDown(int step) {
                 if (m_caretPos.lineIndex < (int)m_rope.getSize() - 1) {
                     m_caretPos.lineIndex++;
                     int desiredCol = oldPos.column;
-                    int lineSize = m_rope.getLineSize(m_caretPos.lineIndex);
+                    int lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
                     if (m_caretPos.lineIndex<m_rope.getSize() && desiredCol >lineSize) {
                         desiredCol = lineSize;
                     }
@@ -1008,7 +1010,7 @@ void NemoEdit::UpDown(int step) {
                 }
                 else {
                     // 이미 마지막 라인이면 라인 끝으로만 이동
-                    int lineSize = m_rope.getLineSize(m_caretPos.lineIndex);
+                    int lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
                     m_caretPos.column = (m_caretPos.lineIndex < m_rope.getSize() ? lineSize : 0);
                     break;
                 }
@@ -1118,7 +1120,7 @@ void NemoEdit::DeleteChar(bool backspace) {
         if(m_caretPos.column == 0) {
             // 라인 맨 앞에서 백스페이스 -> 이전 라인과 병합
             if(m_caretPos.lineIndex > 0) {
-                int prevLength = m_rope.getLineSize(m_caretPos.lineIndex - 1);
+                int prevLength = (int)m_rope.getLineSize(m_caretPos.lineIndex - 1);
                 m_rope.mergeLine(m_caretPos.lineIndex-1);
 
                 // Undo: 개행 문자 제거
@@ -1256,7 +1258,7 @@ void NemoEdit::DeleteSelection() {
 
 // 최적화된 라인 너비 계산
 int NemoEdit::GetTextWidth(const std::wstring& line) {
-    return m_memDC.GetTextExtent(line.c_str(), line.length()).cx;
+    return m_memDC.GetTextExtent(line.c_str(), (int)line.length()).cx;
 }
 
 // lineIndex: 라인 인덱스 - 다음줄이 시작되는 column의 위치들이 데이터에 저장
@@ -1280,7 +1282,7 @@ std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
     while (currentPos < (int)lineText.length()) {
         // 이진 검색으로 현재 위치에서 가장 텍스트 찾기
         low = 1;
-        high = lineText.length() - currentPos;
+        high = (int)lineText.length() - currentPos;
         result = 1; // 기본값
         currWidth = 0;
 
@@ -1362,7 +1364,7 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
 			// 수직 위치 : 현재 캐럿 라인 전까지의 전체 줄 수 계산
 			int totalLines = -m_scrollYWrapLine;
 			for (int i = m_scrollYLine; i < lineIndex; i++) {
-                totalLines += FindWordWrapPosition(i).size()+1;
+                totalLines += (int)FindWordWrapPosition(i).size()+1;
 				if (totalLines > visibleLines) break;
 			}
 			totalLines += wrapLineIndex;
@@ -1429,7 +1431,7 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
         CRect client;
         GetClientRect(&client);
 		int visibleLines = client.Height() / m_lineHeight;
-        int lineSize = m_rope.getSize();
+        int lineSize = (int)m_rope.getSize();
         int prevY = 0;
         std::vector<int> wrapCols;
         int wrapColsSize = 0;
@@ -1437,13 +1439,13 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
         int totalPrevLines = -m_scrollYWrapLine;
         for (int i = m_scrollYLine; i < lineSize; i++) {
             wrapCols = FindWordWrapPosition(i);
-            totalPrevLines += wrapCols.size() + 1;
+            totalPrevLines += (int)wrapCols.size() + 1;
             prevY = totalPrevLines * m_lineHeight+m_margin.top;
             pos.lineIndex = i;
             if (prevY >= pt.y) {
                 pos.lineIndex = i;
                 // wrapLineIndex 계산
-                wrapColsSize = wrapCols.size();
+                wrapColsSize = (int)wrapCols.size();
                 prevY -= wrapColsSize * m_lineHeight;
 				if (prevY >= pt.y) {
 					// 현재 줄의 wordwrap 시작 컬럼을 찾는다.
@@ -1470,7 +1472,7 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
         if (!lineText.empty()) {
             // 이진 검색으로 텍스트에서 현재 위치 찾기
             low = 1;
-            high = lineText.size() - startCol;
+            high = (int)lineText.size() - startCol;
             result = 0; // 기본값
             pointX = pt.x - CalculateNumberAreaWidth()-m_margin.left;
 
@@ -1589,9 +1591,9 @@ void NemoEdit::EnsureCaretVisible() {
         else if (pt.y + m_lineHeight > screenHeight) {
             int totalLineCnt = 0;
             int wrapCnt = 0;
-            totalLineCnt -= wrapPositions.size() - wrapLineIndex;
+            totalLineCnt -= (int)wrapPositions.size() - wrapLineIndex;
             for (int i = m_caretPos.lineIndex; i > 0; i--) {
-                wrapCnt = FindWordWrapPosition(i).size() + 1; // 화면 줄수 + 워드랩 줄수
+                wrapCnt = (int)FindWordWrapPosition(i).size() + 1; // 화면 줄수 + 워드랩 줄수
                 totalLineCnt += wrapCnt;
                 m_scrollYLine = i;
                 m_scrollYWrapLine = 0;
@@ -1684,7 +1686,7 @@ void NemoEdit::RecalcScrollSizes() {
         int visibleLines = max(1, (client.Height()-m_margin.top-m_margin.bottom) / m_lineHeight);
 
         // 총 라인 수 - 전체 라인 기준으로 사용
-        int totalRealLines = max(1, m_rope.getSize());
+        int totalRealLines = max(1, (int)m_rope.getSize());
 
         // 수직 스크롤바 설정 - 일반 라인 수 기준으로 설정
         si.nMin = 0;
@@ -1695,7 +1697,7 @@ void NemoEdit::RecalcScrollSizes() {
     }
     else {
         // 일반 텍스트 라인 수 계산
-        int totalDisplayLines = max(1,m_rope.getSize());
+        int totalDisplayLines = max(1,(int)m_rope.getSize());
 
         // 최대 텍스트 폭 계산 (가로 스크롤)
         int maxWidth = GetMaxWidth();
@@ -1916,7 +1918,7 @@ void NemoEdit::OnPaint() {
                     int endPos;
 					if (i == wrapPositions.size()) {
 						// 마지막 라인 처리
-						endPos = lineStr.length();
+						endPos = (int)lineStr.length();
                     }
                     else {
                         endPos = wrapPositions[i];
@@ -1940,7 +1942,7 @@ void NemoEdit::OnPaint() {
     else {
         // 기존 모드 (non-워드랩)
         int lineIndex = m_scrollYLine;
-        int maxLine = m_rope.getSize();
+        int maxLine = (int)m_rope.getSize();
         std::wstring lineStr;
 
         while ( lineIndex< maxLine && y < client.Height()) {
@@ -2062,7 +2064,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
             // 선택 부분이 이 세그먼트에 겹치지 않음 - 최적화된 그리기
             UINT textOutOptions = ETO_CLIPPED;
             m_memDC.ExtTextOut(x, y, textOutOptions, &clipRect,
-                tabText.c_str(), tabText.size(), NULL);
+                tabText.c_str(), (UINT)tabText.size(), NULL);
             return;
         }
 
@@ -2086,7 +2088,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
 
             if (x + preSize.cx > 0 && x < client.Width()) {
                 m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &clipRect,
-                    tabText.c_str(), tabText.length(), NULL);
+                    tabText.c_str(), (UINT)tabText.length(), NULL);
             }
             x += preSize.cx;
         }
@@ -2110,7 +2112,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
                     m_memDC.FillSolidRect(visibleSelRect, ::GetSysColor(COLOR_HIGHLIGHT));
                     m_memDC.SetTextColor(::GetSysColor(COLOR_HIGHLIGHTTEXT));
                     m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &visibleSelRect,
-                        tabText.c_str(), tabText.length(), NULL);
+                        tabText.c_str(), (UINT)tabText.length(), NULL);
                     m_memDC.SetTextColor(oldTextColor);
                 }
             }
@@ -2127,7 +2129,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
                 CRect postClipRect(max(0, x), y, min(client.Width(), x + postSize.cx), y + m_lineHeight);
                 m_memDC.SetBkColor(m_colorInfo.textBg);
                 m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &clipRect,
-                    tabText.c_str(), tabText.length(), NULL);
+                    tabText.c_str(), (UINT)tabText.length(), NULL);
             }
         }
     }
@@ -2136,7 +2138,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         UINT textOutOptions = ETO_CLIPPED;
         m_memDC.SetBkColor(m_colorInfo.textBg);
         m_memDC.ExtTextOut(x, y, textOutOptions, &clipRect,
-            tabText.c_str(), tabText.length(), NULL);
+            tabText.c_str(), (UINT)tabText.length(), NULL);
     }
 }
 
@@ -2741,7 +2743,7 @@ void NemoEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags) {
         int visibleLines = client.Height() / m_lineHeight;
         if(visibleLines < 1) visibleLines = 1;
         m_caretPos.lineIndex = max(0, m_caretPos.lineIndex - visibleLines);
-        lineSize = m_rope.getLineSize(m_caretPos.lineIndex);
+        lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
         int desiredCol = oldCaret.column;
         if(m_caretPos.lineIndex < m_rope.getSize() && desiredCol > lineSize) {
             desiredCol = lineSize;
@@ -2759,7 +2761,7 @@ void NemoEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags) {
         int visibleLines = client.Height() / m_lineHeight;
         if(visibleLines < 1) visibleLines = 1;
         m_caretPos.lineIndex = min((int)m_rope.getSize() - 1, m_caretPos.lineIndex + visibleLines);
-        lineSize = m_rope.getLineSize(m_caretPos.lineIndex);
+        lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
         int desiredCol = oldCaret.column;
         if(m_caretPos.lineIndex < m_rope.getSize() && desiredCol > lineSize) {
             desiredCol = lineSize;
@@ -2974,7 +2976,7 @@ void Rope::insertAt(size_t lineIndex, size_t offset, const std::wstring& text) {
         insert(lineIndex, text);
     }
     else {
-        int startPos = offset;
+        size_t startPos = offset;
         if (it->empty() || offset >= it->size()) {
             startPos = it->size();
         }
@@ -3013,7 +3015,7 @@ void Rope::erase(size_t lineIndex) {
 void Rope::eraseAt(size_t lineIndex, size_t offset, size_t size) {
     if (lineIndex >= lines.size()) return;
 
-    int actualSize = size;
+    size_t actualSize = size;
     auto it = getIterator(lineIndex);
     if (it->empty() || offset >= it->size()) return;
     if (offset + size > it->size()) actualSize = it->size() - offset;
@@ -3109,7 +3111,7 @@ std::wstring Rope::getTextRange(size_t startLineIndex, size_t startLineColumn, s
         text += L"\n";
         if (endLineIndex - startLineIndex > 1) {
             auto it = std::next(itStart);
-            for (int line = startLineIndex + 1; line < endLineIndex; line++) {
+            for (size_t line = startLineIndex + 1; line < endLineIndex; line++) {
                 if (it == lines.end()) break;
                 text += *it;
                 text += L"\n";
@@ -3239,7 +3241,7 @@ bool Rope::splitNodeByExact(RopeNode* leaf, size_t cutSize) {
         leaf->parent = newLeaf->parent = newInternal;
         return true; // 성공
     }
-    catch (const std::exception& e) {
+    catch (...) {
         // 예외 발생 시 실패 반환
         return false;
     }
@@ -3280,7 +3282,7 @@ void Rope::deleteLeafNode(RopeNode* node) {
     if (!node->data.empty()) {
         auto it = node->data.begin();
         auto itEnd = node->data.begin() + node->data.size() - 1;
-        int eraseCnt = node->data.size();
+        int eraseCnt = (int)node->data.size();
         if (*it != *itEnd) lines.erase(*it, *itEnd);
         lines.erase(*itEnd);
 
@@ -3432,7 +3434,7 @@ void Rope::balanceRope() {
     }
 
     // 새로운 균형 잡힌 트리 구축
-    RopeNode* newRoot = buildBalancedTree(leaves, 0, leaves.size() - 1);
+    RopeNode* newRoot = buildBalancedTree(leaves, 0, (int)leaves.size() - 1);
     if (!newRoot) {
         std::cerr << "오류: buildBalancedTree가 새로운 트리를 생성하지 못함!" << std::endl;
         exit(1);
@@ -3453,7 +3455,7 @@ void Rope::balanceRope() {
 void Rope::insertMultiple(size_t lineIndex, std::list<std::wstring>& newLines) {
     if (!root) return;
     bool isEnd = false;
-    int insertIndex = lineIndex;
+    size_t insertIndex = lineIndex;
     if (lineIndex >= lines.size()) {
         isEnd = true;
         insertIndex = lines.size(); // lines.size()와 같으면 end()라고 보자.
@@ -3546,7 +3548,7 @@ void Rope::insertMultiple(size_t lineIndex, std::list<std::wstring>& newLines) {
         }
     }
     // 새로운 균형 잡힌 트리 구축
-    RopeNode* newRoot = buildBalancedTree(leaves, 0, leaves.size() - 1);
+    RopeNode* newRoot = buildBalancedTree(leaves, 0, (int)leaves.size() - 1);
     if (!newRoot) {
         std::cerr << "오류: buildBalancedTree가 새로운 트리를 생성하지 못함!" << std::endl;
         exit(1);
@@ -3636,7 +3638,7 @@ RopeNode* Rope::buildBalancedTree(std::list<RopeNode*>& leaves, int start, int e
     return node;  // 균형 잡힌 내부 노드 반환
 }
 
-int Rope::updateNodeLengths(RopeNode* node) {
+size_t Rope::updateNodeLengths(RopeNode* node) {
     if (node == nullptr) return 0;
 
     // 리프 노드인 경우
@@ -3647,7 +3649,7 @@ int Rope::updateNodeLengths(RopeNode* node) {
 
     // 내부 노드: 좌우 자식의 Length를 재귀적으로 계산
     node->length = (node->left != nullptr) ? updateNodeLengths(node->left) : 0;
-    int rightLength = (node->right != nullptr) ? updateNodeLengths(node->right) : 0;
+    size_t rightLength = (node->right != nullptr) ? updateNodeLengths(node->right) : 0;
 
     return node->length + rightLength;
 }

@@ -1,4 +1,4 @@
-//﻿*******************************************************************************
+﻿//﻿*******************************************************************************
 //    파     일     명 : NemoEdit.h
 //    프로그램명칭 : 네모 에디터 컨트롤
 //    프로그램용도 : 윈도우즈 MFC 기반의 텍스트 에디터 컨트롤 ( 빠르고, 대용량 가능 )
@@ -72,7 +72,7 @@ private:
     void collectLeafNodes(RopeNode* node, std::list<RopeNode*>& leaves);
     void collectInternalNodes(RopeNode* node, std::vector<RopeNode*>& internals);
     RopeNode* buildBalancedTree(std::list<RopeNode*>& leaves, int start, int end);
-    int updateNodeLengths(RopeNode* node); // root에 걸어서 length 재계산
+    size_t updateNodeLengths(RopeNode* node); // root에 걸어서 length 재계산
     bool isUnbalanced();
     int getMaxDepth(RopeNode* node);
     int getMinDepth(RopeNode* node);
@@ -152,7 +152,7 @@ public:
 
     // 설정 메서드
 	void SetFont(std::wstring fontName, int fontSize, bool bold, bool italic);
-    void SetFont(const LOGFONT& lf);
+    void SetFont(LOGFONT& lf);
     void SetFont(CFont* pFont);
     void SetTabSize(int size);
     void SetLineSpacing(int spacing);
