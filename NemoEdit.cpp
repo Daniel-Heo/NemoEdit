@@ -18,6 +18,8 @@
 #include <afxpriv.h>   // AfxRegisterWndClass 사용을 위해
 
 #pragma comment(lib, "imm32.lib") // IMM32 라이브러리 링크
+#pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "dwrite.lib")
 
 // NemoEdit 클래스 생성자 - 기본 초기화
 NemoEdit::NemoEdit()
@@ -29,7 +31,8 @@ NemoEdit::NemoEdit()
 	  m_scrollX(0), m_scrollYLine(0), m_scrollYWrapLine(0),
       m_nextDiffNum(0),
 	  m_isUseScrollCtrl(FALSE), m_showScrollBars(FALSE),
-	  m_tabSize(4), m_maxWidth(0)
+	  m_tabSize(4), m_maxWidth(0), m_numberAreaWidth(0),
+      m_lastClickTime(0), m_clickCount(0)
  {
     // 텍스트 라인 관련
     m_rope.insert(0, L"");
@@ -45,6 +48,7 @@ NemoEdit::NemoEdit()
     m_colorInfo.textBg = RGB(28, 29, 22);
     m_colorInfo.lineNum = RGB(140, 140, 140);
     m_colorInfo.lineNumBg = RGB(28, 29, 22);
+    m_colorInfo.select = RGB(0, 102, 204);
 	
 	// undo, redo 스택 초기화
     m_undoStack.reserve(100);
@@ -61,6 +65,8 @@ NemoEdit::NemoEdit()
 
 // 소멸자
 NemoEdit::~NemoEdit() {
+    // D2Render 정리
+    m_d2Render.Shutdown();
 }
 
 // 윈도우 클래스 등록 및 컨트롤 생성
@@ -71,9 +77,39 @@ BOOL NemoEdit::Create(DWORD dwStyle, const RECT& rect, CWnd* pParentWnd, UINT nI
     // 기본 스타일 설정 (자식 윈도우, 스크롤바 포함) - WS_CLIPCHILDREN 추가하여 자식 윈도우 영역 그리기 방지
     dwStyle |= WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_CLIPCHILDREN;
     dwStyle &= ~(WS_BORDER | WS_DLGFRAME); // 테두리 제거
-    BOOL res = CreateEx(WS_EX_COMPOSITED, className, _T(""), dwStyle,
+    BOOL res = CreateEx(WS_EX_TRANSPARENT, className, _T(""), dwStyle,
                           rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
                           pParentWnd->GetSafeHwnd(), (HMENU)(UINT_PTR)nID);
+
+    TRACE(L"Create start\n");
+    // CreateEx 실행 후 Z-order 설정 추가
+    if (res) {
+        // Z-order를 맨 아래로 설정
+        ::SetWindowPos(m_hWnd, HWND_BOTTOM, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (!m_d2Render.Initialize(GetSafeHwnd())) {
+            AfxMessageBox(L"Direct2D 초기화에 실패했습니다.");
+            return -1;
+		}
+
+        // 기본 폰트 설정 (Consolas는 거의 모든 Windows 시스템에 기본 설치됨)
+        m_d2Render.SetFont(L"D2Coding", 16, false, false);
+
+        //// 색상 설정
+        m_d2Render.SetTextColor(m_colorInfo.text);
+        m_d2Render.SetBgColor(m_colorInfo.textBg);
+        m_d2Render.SetLineNumColor(m_colorInfo.lineNum);
+        m_d2Render.SetLineNumBgColor(m_colorInfo.lineNumBg);
+        m_d2Render.SetSelectionColors(m_colorInfo.text, m_colorInfo.select);
+
+        m_lineHeight = m_d2Render.GetLineHeight();
+        TRACE(L"m_lineHeight=%d\n", m_lineHeight);
+        m_charWidth = m_charWidth = GetTextWidth(L"080") - GetTextWidth(L"08");
+
+        CRect client;
+        GetClientRect(&client);
+        m_d2Render.Resize(client.Width(), client.Height());
+    }
 
     HideIME();
 
@@ -177,71 +213,35 @@ int NemoEdit::CalculateNumberAreaWidth() {
 int NemoEdit::OnCreate(LPCREATESTRUCT lpCreateStruct) {
     if(CWnd::OnCreate(lpCreateStruct) == -1)
         return -1;
-    // 기본 폰트 설정 (시스템 기본 GUI 폰트 사용)
-    CFont* pDefaultFont = CFont::FromHandle((HFONT)::GetStockObject(DEFAULT_GUI_FONT));
-    LOGFONT lf;
-    pDefaultFont->GetLogFont(&lf);
-    m_font.CreateFontIndirect(&lf);
-    // 폰트 메트릭 계산
-    CClientDC dc(this);
-    dc.SelectObject(&m_font);
-    TEXTMETRIC tm;
-    dc.GetTextMetrics(&tm);
-    m_lineHeight = tm.tmHeight + tm.tmExternalLeading + m_lineSpacing;
-    m_charWidth = tm.tmAveCharWidth; // 평균 문자 넓이를 적용한다.
-    // 더블 버퍼링용 메모리 DC/비트맵 생성
-    CRect client;
-    GetClientRect(&client);
-    m_memDC.CreateCompatibleDC(&dc);
-    m_memBitmap.CreateCompatibleBitmap(&dc, max(1, client.Width()), max(1, client.Height()));
-    m_memDC.SelectObject(&m_memBitmap);
-    m_memSize = client.Size();
-    m_memDC.SelectObject(&m_font);
-    // Drag & Drop 지원을 원할 경우 OLE 드롭타겟 등록 (생략 가능)
-    // COleDropTarget* pDropTarget = new COleDropTarget();
-    // pDropTarget->Register(this);
     return 0;
 }
 
 // 폰트 변경 (LOGFONT 사용) : font 변경 메인 코어
-void NemoEdit::SetFont(LOGFONT& lf) {
-    m_font.DeleteObject();
-    m_font.CreateFontIndirect(&lf);
-    // 폰트 메트릭 갱신
-    CClientDC dc(this);
-    dc.SelectObject(&m_font);
-    TEXTMETRIC tm;
-    dc.GetTextMetrics(&tm);
-    m_lineHeight = tm.tmHeight + tm.tmExternalLeading + m_lineSpacing;
-    // 메모리 DC에도 새 폰트 선택
-    m_memDC.SelectObject(&m_font);
+void NemoEdit::ApplyFont() {
+    m_lineHeight = m_d2Render.GetLineHeight() + m_lineSpacing;
     m_charWidth = GetTextWidth(L"080")-GetTextWidth(L"08"); // 공백 문자 너비로 대체
     m_nextDiffNum = 0; // numLineArea 재계산
-    CreateSolidCaret(2, m_lineHeight - m_lineSpacing);
+    CreateSolidCaret(2, m_lineHeight - m_lineSpacing); // test
     RecalcScrollSizes();
     Invalidate(FALSE);
 }
 
-void NemoEdit::SetFont(std::wstring fontName, int fontSize, bool bold, bool italic) {
-	LOGFONT lf;
-	memset(&lf, 0, sizeof(LOGFONT));
-	wcscpy_s(lf.lfFaceName, fontName.c_str());
-	lf.lfHeight = -fontSize;
-	lf.lfWeight = bold ? FW_BOLD : FW_NORMAL;
-	lf.lfItalic = italic;
-	SetFont(lf);
+void NemoEdit::SetFontSize(int size) {
+    m_d2Render.SetFontSize(size);
+    ApplyFont();
 }
 
-// 폰트 변경 (기존 CFont 객체 사용)
-void NemoEdit::SetFont(CFont* pFont) {
-    LOGFONT lf;
-    if(pFont) {
-        pFont->GetLogFont(&lf);
-    } else {
-        CFont* pDefaultFont = CFont::FromHandle((HFONT)::GetStockObject(DEFAULT_GUI_FONT));
-        pDefaultFont->GetLogFont(&lf);
-    }
-    SetFont(lf);
+int NemoEdit::GetFontSize() {
+    return m_d2Render.GetFontSize();
+}
+
+void NemoEdit::SetFont(std::wstring fontName, int fontSize, bool bold, bool italic) {
+    m_d2Render.SetFont(fontName, fontSize, bold, italic);
+    ApplyFont();
+}
+
+void NemoEdit::GetFont(std::wstring& fontName, int& fontSize, bool& bold, bool& italic) {
+	m_d2Render.GetFont(fontName, fontSize, bold, italic);
 }
 
 void NemoEdit::SetTabSize(int size) {
@@ -250,15 +250,13 @@ void NemoEdit::SetTabSize(int size) {
     Invalidate(FALSE);
 }
 
+int NemoEdit::GetTabSize() {
+    return m_tabSize;
+}
 // 추가 줄 간격 설정
 void NemoEdit::SetLineSpacing(int spacing) {
     m_lineSpacing = spacing;
-    // 라인 높이 갱신
-    CClientDC dc(this);
-    dc.SelectObject(&m_font);
-    TEXTMETRIC tm;
-    dc.GetTextMetrics(&tm);
-    m_lineHeight = tm.tmHeight + tm.tmExternalLeading + m_lineSpacing;
+    m_lineHeight = m_d2Render.GetLineHeight() + m_lineSpacing;
     RecalcScrollSizes();
     Invalidate(FALSE);
 }
@@ -319,13 +317,41 @@ void NemoEdit::SetMargin(int left, int right, int top, int bottom) {
 void NemoEdit::SetTextColor(COLORREF textColor, COLORREF bgColor) {
 	m_colorInfo.text = textColor;
 	m_colorInfo.textBg = bgColor;
+    m_d2Render.SetTextColor(m_colorInfo.text);
+    m_d2Render.SetBgColor(m_colorInfo.textBg);
 	Invalidate(FALSE);
+}
+
+void NemoEdit::SetTextColor(COLORREF textColor) {
+    m_colorInfo.text = textColor;
+    m_d2Render.SetTextColor(m_colorInfo.text);
+	Invalidate(FALSE);
+}
+
+void NemoEdit::SetBgColor(COLORREF textBgColor, COLORREF lineBgColor) {
+    m_colorInfo.textBg = textBgColor;
+    m_colorInfo.lineNumBg = lineBgColor;
+    m_d2Render.SetBgColor(m_colorInfo.textBg);
+    m_d2Render.SetLineNumBgColor(m_colorInfo.lineNumBg);
+    Invalidate(FALSE);
+}
+
+void SetBgColior(COLORREF textColor);
+
+COLORREF NemoEdit::GetTextColor() {
+    return m_colorInfo.text;
+}
+
+COLORREF NemoEdit::GetTextBgColor() {
+    return m_colorInfo.textBg;
 }
 
 // 라인 번호 색상 설정
 void NemoEdit::SetLineNumColor(COLORREF lineNumColor, COLORREF bgColor) {
 	m_colorInfo.lineNum = lineNumColor;
 	m_colorInfo.lineNumBg = bgColor;
+    m_d2Render.SetLineNumColor(m_colorInfo.lineNum);
+    m_d2Render.SetLineNumBgColor(m_colorInfo.lineNumBg);
 	Invalidate(FALSE);
 }
 
@@ -510,6 +536,43 @@ std::wstring NemoEdit::ExpandTabs(const std::wstring& text) {
     }
 
     return result;
+}
+
+// Tab 문자의 개수를 카운팅
+int NemoEdit::TabCount(const std::wstring& text, int endPos) {
+    int endCnt = min(endPos, text.length());
+    int tabCnt = 0;
+    // 입력 문자열을 순회하며 탭을 공백으로 변환
+    for (size_t i = 0; i < endCnt; i++)
+        if (text[i] == L'\t') tabCnt++;
+
+    return tabCnt;
+}
+
+// 트리플 클릭 처리 메서드 구현
+void NemoEdit::HandleTripleClick(CPoint point)
+{
+    // 현재 클릭 위치에 해당하는 텍스트 위치 가져오기
+    TextPos pos = GetTextPosFromPoint(point);
+
+    // 선택 영역 시작 위치를 라인의 시작으로 설정
+    m_selectInfo.start.lineIndex = pos.lineIndex;
+    m_selectInfo.start.column = 0;
+
+    // 선택 영역 끝 위치를 라인의 끝으로 설정
+    m_selectInfo.end.lineIndex = pos.lineIndex;
+    m_selectInfo.end.column = (int)m_rope.getLineSize(pos.lineIndex);
+
+    // 선택 상태 설정
+    m_selectInfo.isSelected = true;
+    m_selectInfo.anchor = m_selectInfo.start;
+
+    // 캐럿 위치를 라인의 끝으로 설정
+    m_caretPos = m_selectInfo.end;
+
+    // 화면 갱신
+    UpdateCaretPosition();
+    Invalidate(FALSE);
 }
 
 // 선택된 텍스트 클립보드로 복사
@@ -1258,7 +1321,7 @@ void NemoEdit::DeleteSelection() {
 
 // 최적화된 라인 너비 계산
 int NemoEdit::GetTextWidth(const std::wstring& line) {
-    return m_memDC.GetTextExtent(line.c_str(), (int)line.length()).cx;
+    return m_d2Render.GetTextWidth(line);
 }
 
 // lineIndex: 라인 인덱스 - 다음줄이 시작되는 column의 위치들이 데이터에 저장
@@ -1563,6 +1626,7 @@ void NemoEdit::EnsureCaretVisible() {
     // 화면 표시 영역 크기 계산
     CRect client;
     GetClientRect(&client);
+	if (client.Width() < 0 || client.Height() < 0) return; // 화면이 없을 경우
     int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
     int screenHeight = client.Height() - m_margin.top - m_margin.bottom;
     int visibleLines = screenHeight / m_lineHeight; // 마진을 제외한 화면에 보이는 줄 수 ( top margin만 계산 )
@@ -1662,8 +1726,6 @@ void NemoEdit::RecalcScrollSizes() {
 
     CRect client;
     GetClientRect(&client);
-    CClientDC dc(this);
-    dc.SelectObject(&m_font);
 
     // 라인 번호 영역 너비 계산
     int numberAreaWidth = 0;
@@ -1737,6 +1799,32 @@ void NemoEdit::SetScrollCtrl(bool show) {
 	}
 }
 
+// 텍스트 전체를 선택하는 함수
+void NemoEdit::SelectAll() {
+    // 텍스트가 없는 경우 조기 반환
+    if (m_rope.empty()) return;
+
+    // 선택 영역을 첫 번째 문자부터 마지막 문자까지 설정
+    m_selectInfo.start = TextPos(0, 0);
+
+    // 마지막 라인과 그 길이 계산
+    int lastLineIndex = static_cast<int>(m_rope.getSize() - 1);
+    int lastLineSize = static_cast<int>(m_rope.getLineSize(lastLineIndex));
+
+    m_selectInfo.end = TextPos(lastLineIndex, lastLineSize);
+    m_selectInfo.anchor = m_selectInfo.start;
+
+    // 커서를 선택 영역의 끝으로 이동
+    m_caretPos = m_selectInfo.end;
+
+    // 선택 상태 설정
+    m_selectInfo.isSelected = true;
+
+    // 뷰 갱신 및 커서 위치 조정
+    EnsureCaretVisible();
+    UpdateCaretPosition();
+    Invalidate(FALSE);
+}
 // NemoShowScrollBar 래핑 함수
 void NemoEdit::NemoShowScrollBar(UINT nBar, BOOL bShow) {
     BOOL bVisibleVert=FALSE;
@@ -1799,26 +1887,6 @@ void NemoEdit::NemoSetScrollPos(int nBar, int nPos, BOOL bRedraw) {
 void NemoEdit::DrawLineNo(int lineIndex, int yPos) {
     if (!m_showLineNumbers) return;
 
-    // 라인번호 폰트 설정
-    LOGFONT lf;
-    m_font.GetLogFont(&lf);
-    lf.lfQuality = PROOF_QUALITY;  // 선명한 글꼴 렌더링
-
-    // 현재 폰트와 색상 저장
-    COLORREF oldTextColor = m_memDC.GetTextColor();
-    CFont* pOldFont = m_memDC.GetCurrentFont();
-
-    // 라인 번호용 새 폰트 설정
-    LOGFONT lf_num;
-    lf_num = lf;
-    lf_num.lfWeight = FW_BOLD;
-    CFont numFont;
-    numFont.CreateFontIndirect(&lf_num);
-
-    // 라인 번호 색상과 폰트 설정
-    m_memDC.SetTextColor(m_colorInfo.lineNum);
-    m_memDC.SelectObject(&numFont);
-
     // 라인 번호 그리기
     int numAreaWidth = CalculateNumberAreaWidth();
     CString numStr;
@@ -1826,43 +1894,26 @@ void NemoEdit::DrawLineNo(int lineIndex, int yPos) {
     numStr.Format(_T("%d"), lineIndex + 1);
     numSize = GetTextWidth(numStr.GetString());
     int xPos = numAreaWidth - numSize.cx - 10;
-    m_memDC.TextOut(xPos, yPos, numStr);
-
-    // 원래 색상과 폰트로 복원
-    m_memDC.SetTextColor(oldTextColor);
-    m_memDC.SelectObject(pOldFont);
-
-    // 임시 폰트 객체 정리
-    numFont.DeleteObject(); // 사용이 끝난 CFont 객체 정리
+    m_d2Render.DrawLineText(xPos, yPos, nullptr, numStr.GetString(), numStr.GetLength());
 }
 
 // 화면 그리기 (더블 버퍼링 사용)
 void NemoEdit::OnPaint() {
-    CPaintDC dc(this);
+    CPaintDC dc(this); // WM_PAINT 메시지 처리를 위해 필요
+
+    m_d2Render.BeginDraw();
     CRect client;
     GetClientRect(&client);
 
-    // 오프스크린 비트맵 크기 갱신
-    if (client.Size() != m_memSize) {
-        m_memBitmap.DeleteObject();
-        m_memBitmap.CreateCompatibleBitmap(&dc, max(1, client.Width()), max(1, client.Height()));
-        m_memDC.SelectObject(&m_memBitmap);
-        m_memSize = client.Size();
-    }
-
-    // 배경 색으로 채우기
-    m_memDC.FillSolidRect(client, m_colorInfo.textBg);
-    m_memDC.SelectObject(&m_font);
-    m_memDC.SetTextColor(m_colorInfo.text);
-    m_memDC.SetBkMode(TRANSPARENT);
+    // 배경 지우기
+    m_d2Render.Clear(m_colorInfo.textBg);
 
     // 라인 번호 영역 그리기
     int numberAreaWidth = 0;
     if (m_showLineNumbers) {
         numberAreaWidth = CalculateNumberAreaWidth();
-        CRect gutterRect = client;
-        gutterRect.right = numberAreaWidth;
-        m_memDC.FillSolidRect(gutterRect, m_colorInfo.lineNumBg);
+        D2D1_RECT_F lineRect = D2D1::RectF(client.left, client.top, numberAreaWidth, client.bottom);
+        m_d2Render.FillSolidRect(lineRect, m_colorInfo.lineNumBg);
     }
 
     // 텍스트 라인 출력 (선택 영역 강조 포함)
@@ -1950,7 +2001,7 @@ void NemoEdit::OnPaint() {
             // 수평 클리핑 최적화 (화면 밖에 있는 텍스트는 그리지 않음)
             int lineWidth = GetLineWidth(lineIndex);
             if (numberAreaWidth - m_scrollX + lineWidth <= 0) {
-                // 완전히 화면 왼쪽 바깥에 있으면 그리지 않고 다음 라인으로
+                // 완전히 화면 왼쪽 바깥에 있으면 출력하지 않고 다음 라인으로
                 DrawLineNo(lineIndex, y);
                 y += m_lineHeight;
                 lineIndex++;
@@ -1975,11 +2026,11 @@ void NemoEdit::OnPaint() {
     }
 
     // 오프스크린 버퍼를 화면에 출력
-    dc.BitBlt(0, 0, client.Width(), client.Height(), &m_memDC, 0, 0, SRCCOPY);
+    m_d2Render.EndDraw();
 }
 
 BOOL NemoEdit::OnEraseBkgnd(CDC* pDC) {
-    return FALSE; // 기본 배경 지우기 방지 (더블 버퍼링으로 그릴 것이므로)
+    return TRUE; // 기본 배경 지우기 방지 (더블 버퍼링으로 그릴 것이므로)
 }
 
 // 주어진 텍스트를 화면에 출력 (선택 강조 포함)
@@ -1991,8 +2042,8 @@ BOOL NemoEdit::OnEraseBkgnd(CDC* pDC) {
 void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring& segment, int xOffset, int y) {
     if (segment.empty()) {
         // 내용이 없는 경우도 캐럿 표시 위해 배경색으로 칠하기
-        CRect rect(xOffset - m_scrollX, y, xOffset - m_scrollX + 2, y + m_lineHeight);
-        m_memDC.FillSolidRect(rect, m_colorInfo.textBg);
+        D2D1_RECT_F lineRect = D2D1::RectF(xOffset - m_scrollX, y, xOffset - m_scrollX + 2, y + m_lineHeight);
+        m_d2Render.FillSolidRect(lineRect, m_colorInfo.textBg);
         return;
     }
 
@@ -2051,26 +2102,32 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
                 selStartCol = 0;
                 selEndCol = segText.size()+segStartIdx;
             }
+
+            // 출력라인에 선택영역이 존재할 경우 탭 확장 적용
+            if (selStartCol < selEndCol) {
+                // selStartCol 전에 탭 확장만큼 더해주기
+                selStartCol += TabCount(segText, selStartCol) * (m_tabSize-1);
+                // selEndCol 전에 탭 확장만큼 더해주기
+                selEndCol += TabCount(segText, selEndCol) * (m_tabSize-1);
+            }
         }
     }
 
     // 클리핑 영역 설정 - 보이는 영역으로 제한
-    CRect clipRect(max(xOffset, x), y, min(client.Width(), x + textSize.cx), y + m_lineHeight);
+    D2D1_RECT_F clipRect = D2D1::RectF(max(xOffset, x), y, min(client.Width(), x + textSize.cx), y + m_lineHeight);
 
     if (hasSelection && selEndCol > selStartCol) {
         // 텍스트와 겹치는 선택 범위 구하기
         size_t segEndIdx = segStartIdx + segText.size();
-        if (selStartCol >= segEndIdx) {
+        if (selStartCol >= segEndIdx || selEndCol<=segStartIdx) {
             // 선택 부분이 이 세그먼트에 겹치지 않음 - 최적화된 그리기
-            UINT textOutOptions = ETO_CLIPPED;
-            m_memDC.ExtTextOut(x, y, textOutOptions, &clipRect,
-                tabText.c_str(), (UINT)tabText.size(), NULL);
+            m_d2Render.DrawEditText(x, y, &clipRect, tabText.c_str(), tabText.size());
             return;
         }
 
         // 세그먼트와 겹치는 선택 범위 구하기
         size_t drawSelStart = max(segStartIdx, selStartCol); // 선택 시작 위치
-        size_t drawSelEnd = min(segStartIdx + segText.size(), selEndCol); // 선택 끝 위치 (현재 세그먼트 범위 내로 제한)
+        size_t drawSelEnd = min(segStartIdx + tabText.size(), selEndCol); // 선택 끝 위치 (현재 세그먼트 범위 내로 제한)
 
         // 선택 범위가 유효한지 확인 (끝이 시작보다 뒤에 있는지)
         if (drawSelEnd < drawSelStart) {
@@ -2080,65 +2137,11 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         size_t relSelStart = drawSelStart - segStartIdx; // 세그먼트 내 선택 시작 위치
         size_t relSelEnd = drawSelEnd - segStartIdx; // 세그먼트 내 선택 끝 위치
 
-        // 선택 전 부분 출력 (클리핑 처리)
-        if (relSelStart > 0) {
-            std::wstring preText = segText.substr(0, relSelStart);
-            tabText = ExpandTabs(preText);
-            CSize preSize = GetTextWidth(tabText.c_str());
-
-            if (x + preSize.cx > 0 && x < client.Width()) {
-                m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &clipRect,
-                    tabText.c_str(), (UINT)tabText.length(), NULL);
-            }
-            x += preSize.cx;
-        }
-
-        // 선택된 부분 출력 (클리핑 처리)
-        if (relSelEnd > relSelStart) {
-            std::wstring selText = segText.substr(relSelStart, relSelEnd - relSelStart);
-            tabText = ExpandTabs(selText);
-            CSize selSize = GetTextWidth(tabText.c_str());
-
-            if (x + selSize.cx > 0 && x < client.Width()) {
-                COLORREF oldTextColor = m_memDC.GetTextColor();
-                CRect selRect(x, y, x + selSize.cx, y + m_lineHeight);
-
-                // 선택 영역의 클리핑 처리
-                CRect visibleSelRect = selRect;
-                visibleSelRect.left = max(xOffset, visibleSelRect.left);
-                visibleSelRect.right = min(client.Width(), visibleSelRect.right);
-
-                if (!visibleSelRect.IsRectEmpty()) {
-                    m_memDC.FillSolidRect(visibleSelRect, ::GetSysColor(COLOR_HIGHLIGHT));
-                    m_memDC.SetTextColor(::GetSysColor(COLOR_HIGHLIGHTTEXT));
-                    m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &visibleSelRect,
-                        tabText.c_str(), (UINT)tabText.length(), NULL);
-                    m_memDC.SetTextColor(oldTextColor);
-                }
-            }
-            x += selSize.cx;
-        }
-
-        // 선택 후 남은 부분 출력 (클리핑 처리)
-        if (relSelEnd < segText.size()) {
-            std::wstring postText = segText.substr(relSelEnd);
-            tabText = ExpandTabs(postText);
-            CSize postSize = GetTextWidth(tabText.c_str());
-
-            if (x < client.Width() && x + postSize.cx > 0) {
-                CRect postClipRect(max(0, x), y, min(client.Width(), x + postSize.cx), y + m_lineHeight);
-                m_memDC.SetBkColor(m_colorInfo.textBg);
-                m_memDC.ExtTextOut(x, y, ETO_CLIPPED, &clipRect,
-                    tabText.c_str(), (UINT)tabText.length(), NULL);
-            }
-        }
+        m_d2Render.DrawEditText(x, y, &clipRect, tabText.c_str(), tabText.size(), true, relSelStart, relSelEnd);
     }
     else {
         // 선택 없는 경우 - 클리핑된 영역만 효율적으로 그리기
-        UINT textOutOptions = ETO_CLIPPED;
-        m_memDC.SetBkColor(m_colorInfo.textBg);
-        m_memDC.ExtTextOut(x, y, textOutOptions, &clipRect,
-            tabText.c_str(), (UINT)tabText.length(), NULL);
+        m_d2Render.DrawEditText(x, y, &clipRect, tabText.c_str(), tabText.size());
     }
 }
 
@@ -2292,22 +2295,31 @@ void NemoEdit::HideIME() {
     ImmSetCompositionWindow(hIMC, &cf);
 }
 
+size_t NemoEdit::GetSize() {
+    return m_rope.getSize();
+}
+
+int NemoEdit::GetCurrentLineNo() {
+    return m_caretPos.lineIndex;
+}
+
+void NemoEdit::GotoLine(size_t lineNo) {
+    m_caretPos.lineIndex = (int)lineNo;
+    EnsureCaretVisible();
+    Invalidate(FALSE);
+}
+
 // 윈도우 크기 조정
 void NemoEdit::OnSize(UINT nType, int cx, int cy) {
     CWnd::OnSize(nType, cx, cy);
     if (cx <= 0 || cy <= 0) return;
 
-    // 메모리 DC 비트맵 재설정
-    CClientDC dc(this);
+    // 창 크기가 변경되면 D2Render 크기도 업데이트
+    if (cx > 0 && cy > 0) {
+        m_d2Render.Resize(cx, cy);
+    }
 
-    // 새 비트맵 생성 및 선택
-    m_memBitmap.DeleteObject();
-    m_memBitmap.CreateCompatibleBitmap(&dc, cx, cy);
-    m_memDC.SelectObject(&m_memBitmap);
-
-    // 메모리 크기 갱신
-    m_memSize = CSize(cx, cy);
-
+    if (!m_lineHeight) return;
     RecalcScrollSizes(); // 스크롤 크기 재계산
     Invalidate(FALSE);
 }
@@ -2390,6 +2402,13 @@ BOOL NemoEdit::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt) {
 
 void NemoEdit::OnLButtonDblClk(UINT nFlags, CPoint point)
 {
+    // 클릭 카운트를 2로 설정 (더블 클릭)
+    m_clickCount = 2;
+
+    // 마지막 클릭 정보 업데이트
+    m_lastClickTime = GetTickCount();
+    m_lastClickPos = point;
+
     // 포커스 설정 및 기본 더블클릭 처리
     SetFocus();
 
@@ -2436,6 +2455,39 @@ void NemoEdit::OnLButtonDblClk(UINT nFlags, CPoint point)
 void NemoEdit::OnLButtonDown(UINT nFlags, CPoint point) {
     SetFocus();
 
+    // 현재 클릭 시간 가져오기
+    DWORD currentClickTime = GetTickCount();
+
+    // 이전 클릭과 시간 간격(500ms) 및 위치(5픽셀) 확인
+    bool isDoubleClickTime = (currentClickTime - m_lastClickTime) < 500;
+    bool isNearLastClick = abs(point.x - m_lastClickPos.x) < 5 && abs(point.y - m_lastClickPos.y) < 5;
+
+    // 이전 클릭과 같은 위치에서 빠르게 클릭된 경우
+    if (isDoubleClickTime && isNearLastClick)
+    {
+        m_clickCount++;
+
+        // 트리플 클릭 확인 (클릭 카운트가 3)
+        if (m_clickCount == 3)
+        {
+            m_clickCount = 0;  // 카운트 초기화
+            HandleTripleClick(point);
+            m_lastClickTime = currentClickTime;
+            m_lastClickPos = point;
+            return;
+        }
+    }
+    else
+    {
+        // 새로운 클릭 시작
+        m_clickCount = 1;
+    }
+
+    // 마지막 클릭 정보 저장
+    m_lastClickTime = currentClickTime;
+    m_lastClickPos = point;
+
+    // 기존 OnLButtonDown 코드 계속 실행
     TextPos pos = GetTextPosFromPoint(point);
 
     // 캐럿 위치 갱신
@@ -2472,8 +2524,6 @@ void NemoEdit::OnLButtonDown(UINT nFlags, CPoint point) {
     }
     m_selectInfo.isSelecting = true;
     SetCapture();
-    // 캐럿 표시
-    //CreateSolidCaret(2, m_lineHeight - m_lineSpacing);
     UpdateCaretPosition();
     ShowCaret();
     Invalidate(FALSE);
@@ -3652,4 +3702,925 @@ size_t Rope::updateNodeLengths(RopeNode* node) {
     size_t rightLength = (node->right != nullptr) ? updateNodeLengths(node->right) : 0;
 
     return node->length + rightLength;
+}
+
+// ---------------------------------------------------
+// D2 Render
+// ---------------------------------------------------
+
+// COLORREF를 D2D1::ColorF로 변환하는 헬퍼 함수
+inline D2D1::ColorF ColorRefToColorF(COLORREF color) {
+    return D2D1::ColorF(
+        GetRValue(color) / 255.0f,
+        GetGValue(color) / 255.0f,
+        GetBValue(color) / 255.0f,
+        1.0f
+    );
+}
+
+// D2Render 클래스 구현
+D2Render::D2Render()
+    : m_fontName(L"Consolas")
+    , m_fontSize(16.0f)
+    , m_fontWeight(DWRITE_FONT_WEIGHT_NORMAL)
+    , m_fontStyle(DWRITE_FONT_STYLE_NORMAL)
+    , m_textColor(D2D1::ColorF(D2D1::ColorF::White))
+    , m_bgColor(D2D1::ColorF(D2D1::ColorF::Black))
+    , m_selectedTextColor(D2D1::ColorF(D2D1::ColorF::White))
+    , m_selectedBgColor(D2D1::ColorF(0.0f, 0.4f, 0.8f))
+    , m_lineNumColor(D2D1::ColorF(0.7f, 0.7f, 0.7f))
+    , m_lineNumBgColor(D2D1::ColorF(0.1f, 0.1f, 0.1f))
+    , m_width(0)
+    , m_height(0)
+    , m_spacing(5)
+    , m_initialized(false)
+{
+    memset(&m_textMetrics, 0, sizeof(TextMetrics));
+    m_pRenderTarget = nullptr;
+    m_pTextFormat = nullptr;
+    m_pTextBrush = nullptr;
+    m_pSelectedTextBrush = nullptr;
+    m_pSelectedBgBrush = nullptr;
+}
+
+D2Render::~D2Render() {
+    Shutdown();
+}
+
+bool D2Render::Initialize(HWND hwnd) {
+    if (m_initialized) {
+        return true;
+    }
+
+    // Direct2D 팩토리 생성
+    HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &m_pD2DFactory);
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    // DirectWrite 팩토리 생성
+    hr = DWriteCreateFactory(
+        DWRITE_FACTORY_TYPE_SHARED,
+        __uuidof(IDWriteFactory),
+        reinterpret_cast<IUnknown**>(&m_pDWriteFactory)
+    );
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    // 렌더 타겟 생성을 위한 속성 설정
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    m_width = rc.right - rc.left;
+    m_height = rc.bottom - rc.top;
+
+    // 핵심 렌더링 품질 설정
+    D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_UNKNOWN, D2D1_ALPHA_MODE_PREMULTIPLIED),
+        0.0f,  // DPI는 기본값
+        0.0f,
+        D2D1_RENDER_TARGET_USAGE_NONE,
+        D2D1_FEATURE_LEVEL_DEFAULT
+    );
+
+    D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps = D2D1::HwndRenderTargetProperties(
+        hwnd,
+        D2D1::SizeU(m_width, m_height),
+        D2D1_PRESENT_OPTIONS_IMMEDIATELY
+    );
+
+    // 렌더 타겟 생성
+    hr = m_pD2DFactory->CreateHwndRenderTarget(
+        rtProps,
+        hwndProps,
+        &m_pRenderTarget
+    );
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    // 텍스트 렌더링 품질 설정
+    m_pRenderTarget->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+
+    // 텍스트 포맷 생성
+    CreateTextFormat();
+
+    // 브러시 생성
+    CreateBrushes();
+
+    // 텍스트 메트릭스 계산
+    UpdateTextMetrics();
+
+    m_initialized = true;
+    return true;
+}
+
+
+void D2Render::SetScreenSize(int width, int height) {
+    if (m_width != width || m_height != height) {
+        m_width = width;
+        m_height = height;
+
+        if (m_pRenderTarget) {
+            m_pRenderTarget->Resize(D2D1::SizeU(width, height));
+        }
+    }
+}
+
+void D2Render::Clear(COLORREF bgColor) {
+    if (!m_initialized || !m_pRenderTarget) {
+        return;
+    }
+
+    //m_pRenderTarget->Clear(ColorRefToColorF(bgColor));
+    // 직접 새 브러시 생성하여 사용
+    CComPtr<ID2D1SolidColorBrush> clearBrush;
+    D2D1::ColorF clearColor = ColorRefToColorF(bgColor);
+    HRESULT hr = m_pRenderTarget->CreateSolidColorBrush(clearColor, &clearBrush);
+
+    if (SUCCEEDED(hr) && clearBrush) {
+        D2D1_SIZE_F size = m_pRenderTarget->GetSize();
+        D2D1_RECT_F rect = D2D1::RectF(0, 0, size.width, size.height);
+        m_pRenderTarget->FillRectangle(rect, clearBrush);
+    }
+    else {
+        TRACE(L"Clear 실패: 브러시 생성 오류 0x%08X\n", hr);
+    }
+}
+
+void D2Render::BeginDraw() {
+    if (!m_initialized || !m_pRenderTarget) {
+        return;
+    }
+
+    // 렌더 타겟의 상태 확인 추가
+    HRESULT windowState = m_pRenderTarget->CheckWindowState();
+    if (windowState == D2D1_WINDOW_STATE_OCCLUDED) {
+        TRACE(L"경고: 렌더 타겟이 가려져 있습니다\n");
+        // 여기서 필요한 처리 추가
+    }
+
+    m_pRenderTarget->BeginDraw();
+}
+
+void D2Render::EndDraw() {
+    if (!m_initialized || !m_pRenderTarget) {
+        return;
+    }
+
+    HRESULT hr = m_pRenderTarget->EndDraw();
+    //if (hr == D2DERR_RECREATE_TARGET) {
+    //    // 장치 손실 처리는 상위 클래스에서 처리
+    //}
+    if (FAILED(hr))
+    {
+        TRACE(L"Direct2D EndDraw 실패! HRESULT: %x\n", hr);
+    }
+}
+
+void D2Render::Resize(int width, int height) {
+    if (!m_initialized || !m_pRenderTarget) {
+        return;
+    }
+
+    m_width = width;
+    m_height = height;
+    m_pRenderTarget->Resize(D2D1::SizeU(width, height));
+}
+
+void D2Render::Shutdown() {
+    // 모든 COM 인터페이스 해제
+    if (m_pLineNumBrush) m_pLineNumBrush.Release();
+    if (m_pSelectedBgBrush) m_pSelectedBgBrush.Release();
+    if (m_pSelectedTextBrush) m_pSelectedTextBrush.Release();
+    if (m_pBgBrush) m_pBgBrush.Release();
+    if (m_pTextBrush) m_pTextBrush.Release();
+    if (m_pLineNumFormat) m_pLineNumFormat.Release();
+    if (m_pTextFormat) m_pTextFormat.Release();
+    if (m_pRenderTarget) m_pRenderTarget.Release();
+    if (m_pDWriteFactory) m_pDWriteFactory.Release();
+    if (m_pD2DFactory) m_pD2DFactory.Release();
+
+    m_initialized = false;
+}
+
+void D2Render::SetFont(std::wstring fontName, int fontSize, bool bold, bool italic) {
+    m_fontName = fontName;
+    m_fontSize = static_cast<float>(fontSize);
+    m_fontWeight = bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL;
+    m_fontStyle = italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL;
+
+    if (m_initialized) {
+        CreateTextFormat();
+        UpdateTextMetrics();
+    }
+}
+
+void D2Render::SetFontSize(int fontSize) {
+    m_fontSize = static_cast<float>(fontSize);
+    if (m_initialized) {
+        CreateTextFormat();
+        UpdateTextMetrics();
+    }
+}
+
+void D2Render::GetFont(std::wstring& fontName, int& fontSize, bool& bold, bool& italic) {
+    // 현재 폰트 정보 가져오기
+    fontName = m_fontName;
+    fontSize = static_cast<int>(m_fontSize);
+    bold = (m_fontWeight == DWRITE_FONT_WEIGHT_BOLD);
+    italic = (m_fontStyle == DWRITE_FONT_STYLE_ITALIC);
+}
+
+int D2Render::GetFontSize() {
+    return m_fontSize;
+}
+
+void D2Render::SetSpacing(int spacing) {
+    m_spacing = spacing;
+}
+
+void D2Render::SetTextColor(COLORREF textColor) {
+    if (!m_initialized || !m_pRenderTarget) {
+        m_textColor = ColorRefToColorF(textColor);
+        return;
+    }
+
+    m_textColor = ColorRefToColorF(textColor);
+    if (m_pTextBrush) {
+        m_pTextBrush->SetColor(m_textColor);
+    }
+}
+
+void D2Render::SetBgColor(COLORREF bgColor) {
+    if (!m_initialized || !m_pRenderTarget) {
+        m_bgColor = ColorRefToColorF(bgColor);
+        return;
+    }
+
+    m_bgColor = ColorRefToColorF(bgColor);
+    if (m_pBgBrush) {
+        m_pBgBrush->SetColor(m_bgColor);
+    }
+}
+
+void D2Render::SetLineNumColor(COLORREF lineNumColor) {
+    if (!m_initialized || !m_pRenderTarget) {
+        m_lineNumColor = ColorRefToColorF(lineNumColor);
+        return;
+    }
+
+    m_lineNumColor = ColorRefToColorF(lineNumColor);
+    if (m_pLineNumBrush) {
+        m_pLineNumBrush->SetColor(m_lineNumColor);
+    }
+}
+
+void D2Render::SetLineNumBgColor(COLORREF bgColor) {
+    if (!m_initialized || !m_pRenderTarget) {
+        m_lineNumBgColor = ColorRefToColorF(bgColor);
+        return;
+    }
+    m_lineNumBgColor = ColorRefToColorF(bgColor);
+}
+
+void D2Render::SetSelectionColors(COLORREF textColor, COLORREF bgColor) {
+    m_selectedTextColor = ColorRefToColorF(textColor);
+    m_selectedBgColor = ColorRefToColorF(bgColor);
+
+    if (m_pSelectedTextBrush) {
+        m_pSelectedTextBrush->SetColor(m_selectedTextColor);
+    }
+
+    if (m_pSelectedBgBrush) {
+        m_pSelectedBgBrush->SetColor(m_selectedBgColor);
+    }
+}
+
+float D2Render::GetTextWidth(const std::wstring& line) {
+    if (!m_initialized || !m_pDWriteFactory || !m_pTextFormat || line.empty()) {
+        return 0.0f;
+    }
+
+    CComPtr<IDWriteTextLayout> textLayout;
+    HRESULT hr = m_pDWriteFactory->CreateTextLayout(
+        line.c_str(),
+        static_cast<UINT32>(line.length()),
+        m_pTextFormat,
+        static_cast<float>(m_width * 2),  // 넉넉한 최대 너비
+        static_cast<float>(m_textMetrics.lineHeight),
+        &textLayout
+    );
+
+    if (FAILED(hr) || !textLayout) {
+        return 0.0f;
+    }
+
+    DWRITE_TEXT_METRICS metrics;
+    hr = textLayout->GetMetrics(&metrics);
+    if (FAILED(hr)) {
+        return 0;
+    }
+    return metrics.widthIncludingTrailingWhitespace;
+}
+
+// 텍스트 내의 각 문자 위치(오프셋)를 픽셀 단위로 측정
+std::vector<int> D2Render::MeasureTextPositions(const std::wstring& text) {
+    std::vector<int> positions;
+    if (!m_initialized || !m_pDWriteFactory || !m_pTextFormat || text.empty()) {
+        return positions;
+    }
+
+    CComPtr<IDWriteTextLayout> textLayout;
+    HRESULT hr = m_pDWriteFactory->CreateTextLayout(
+        text.c_str(),
+        static_cast<UINT32>(text.length()),
+        m_pTextFormat,
+        static_cast<float>(m_width * 2),  // 넉넉한 최대 너비
+        static_cast<float>(m_textMetrics.lineHeight),
+        &textLayout
+    );
+
+    if (FAILED(hr) || !textLayout) {
+        return positions;
+    }
+
+    positions.resize(text.length() + 1, 0);
+
+    for (size_t i = 0; i <= text.length(); ++i) {
+        DWRITE_HIT_TEST_METRICS hitTestMetrics;
+        float pointX, pointY;
+        hr = textLayout->HitTestTextPosition(
+            static_cast<UINT32>(i),
+            FALSE,
+            &pointX,
+            &pointY,
+            &hitTestMetrics
+        );
+
+        if (SUCCEEDED(hr)) {
+            positions[i] = static_cast<int>(pointX);
+        }
+    }
+
+    return positions;
+}
+
+TextMetrics D2Render::GetTextMetrics() const {
+    return m_textMetrics;
+}
+
+float D2Render::GetLineHeight() const {
+    return m_textMetrics.lineHeight;
+}
+
+void D2Render::FillSolidRect(const D2D1_RECT_F& rect, COLORREF color) {
+    if (!m_initialized || !m_pRenderTarget) {
+        return;
+    }
+
+    CComPtr<ID2D1SolidColorBrush> brush;
+    HRESULT hr = m_pRenderTarget->CreateSolidColorBrush(
+        ColorRefToColorF(color),
+        &brush
+    );
+
+    if (SUCCEEDED(hr)) {
+        m_pRenderTarget->FillRectangle(rect, brush);
+    }
+}
+
+void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const wchar_t* text, size_t length) {
+    DrawEditText(x, y, clipRect, text, length, false, 0, length - 1);
+}
+
+void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const wchar_t* text,
+    size_t length, bool selected, int startSelectPos, int endSelectPos) {
+    // 유효성 검사 추가
+    if (!m_initialized || !m_pRenderTarget || !text || length == 0) {
+        return;
+    }
+
+    // 텍스트 포맷 체크
+    if (!m_pTextFormat) {
+        if (!CreateTextFormat()) {
+            return; // 텍스트 포맷 생성 실패
+        }
+    }
+
+    // 브러시 체크 및 생성
+    if (!m_pTextBrush) {
+        if (!CreateBrushes()) {
+            return; // 브러시 생성 실패
+        }
+    }
+
+    // 선택 범위 조정
+    if (selected && startSelectPos >= endSelectPos) {
+        // 전체 텍스트 선택 (기존 동작)
+        startSelectPos = 0;
+        endSelectPos = static_cast<int>(length);
+    }
+
+    // 부분 선택 여부 확인
+    bool isPartialSelection = selected && (startSelectPos > 0 || endSelectPos < static_cast<int>(length));
+
+    // 전체 선택이면 기존 동작 사용
+    if (selected && !isPartialSelection) {
+        // 선택 배경 그리기
+        ID2D1Brush* textBrush = m_pSelectedTextBrush ? m_pSelectedTextBrush : m_pTextBrush;
+
+        D2D1_RECT_F textRect = D2D1::RectF(
+            x,
+            y,
+            x + GetTextWidth(std::wstring(text, length)),
+            y + m_textMetrics.lineHeight + m_spacing
+        );
+
+        if (clipRect) {
+            // 클리핑 영역과 교차
+            textRect.left = max(textRect.left, clipRect->left);
+            textRect.top = max(textRect.top, clipRect->top);
+            textRect.right = min(textRect.right, clipRect->right);
+            textRect.bottom = min(textRect.bottom, clipRect->bottom);
+        }
+
+        if (textRect.right > textRect.left && textRect.bottom > textRect.top) {
+            m_pRenderTarget->FillRectangle(textRect, m_pSelectedBgBrush);
+        }
+
+        // 클리핑 설정
+        bool clippingPushed = false;
+        if (clipRect) {
+            m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
+            clippingPushed = true;
+        }
+
+        // 텍스트 그리기
+        D2D1_RECT_F layoutRect = D2D1::RectF(
+            x,
+            y,
+            x + static_cast<float>(m_width),
+            y + m_textMetrics.lineHeight
+        );
+
+        try {
+            m_pRenderTarget->DrawText(
+                text,
+                static_cast<UINT32>(length),
+                m_pTextFormat,
+                layoutRect,
+                textBrush,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+            );
+        }
+        catch (...) {
+            // 예외 처리
+        }
+
+        // 클리핑 해제
+        if (clippingPushed) {
+            m_pRenderTarget->PopAxisAlignedClip();
+        }
+    }
+    // 부분 선택
+    else if (isPartialSelection) {
+        // 부분 선택 처리
+
+        // 1. 선택 영역 전의 텍스트 그리기
+        if (startSelectPos > 0) {
+            D2D1_RECT_F layoutRect = D2D1::RectF(
+                x,
+                y,
+                x + static_cast<float>(m_width),
+                y + m_textMetrics.lineHeight
+            );
+
+            bool clippingPushed = false;
+            if (clipRect) {
+                m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
+                clippingPushed = true;
+            }
+
+            try {
+                m_pRenderTarget->DrawText(
+                    text,
+                    static_cast<UINT32>(startSelectPos),
+                    m_pTextFormat,
+                    layoutRect,
+                    m_pTextBrush,
+                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+                );
+            }
+            catch (...) {
+                // 예외 처리
+            }
+
+            if (clippingPushed) {
+                m_pRenderTarget->PopAxisAlignedClip();
+            }
+        }
+
+        // 2. 선택된 텍스트 부분 너비 계산
+        std::wstring prePart(text, startSelectPos);
+        float preWidth = GetTextWidth(prePart);
+
+        std::wstring selectedPart(&text[startSelectPos], endSelectPos - startSelectPos);
+        float selectWidth = GetTextWidth(selectedPart);
+
+        // 3. 선택된 부분의 배경 그리기
+        D2D1_RECT_F selectRect = D2D1::RectF(
+            x + preWidth,
+            y,
+            x + preWidth + selectWidth,
+            y + m_textMetrics.lineHeight + m_spacing
+        );
+
+        if (clipRect) {
+            // 클리핑 영역과 교차
+            selectRect.left = max(selectRect.left, clipRect->left);
+            selectRect.top = max(selectRect.top, clipRect->top);
+            selectRect.right = min(selectRect.right, clipRect->right);
+            selectRect.bottom = min(selectRect.bottom, clipRect->bottom);
+        }
+
+        if (selectRect.right > selectRect.left && selectRect.bottom > selectRect.top) {
+            m_pRenderTarget->FillRectangle(selectRect, m_pSelectedBgBrush);
+        }
+
+        // 4. 선택된 텍스트 그리기
+        D2D1_RECT_F layoutRect = D2D1::RectF(
+            x + preWidth,
+            y,
+            x + static_cast<float>(m_width),
+            y + m_textMetrics.lineHeight
+        );
+
+        bool clippingPushed = false;
+        if (clipRect) {
+            m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
+            clippingPushed = true;
+        }
+
+        try {
+            m_pRenderTarget->DrawText(
+                &text[startSelectPos],
+                static_cast<UINT32>(endSelectPos - startSelectPos),
+                m_pTextFormat,
+                layoutRect,
+                m_pSelectedTextBrush ? m_pSelectedTextBrush : m_pTextBrush,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+            );
+        }
+        catch (...) {
+            // 예외 처리
+        }
+
+        if (clippingPushed) {
+            m_pRenderTarget->PopAxisAlignedClip();
+        }
+
+        // 5. 선택 영역 이후의 텍스트 그리기
+        if (endSelectPos < static_cast<int>(length)) {
+            float postX = x + preWidth + selectWidth;
+
+            D2D1_RECT_F layoutRect = D2D1::RectF(
+                postX,
+                y,
+                postX + static_cast<float>(m_width),
+                y + m_textMetrics.lineHeight
+            );
+
+            clippingPushed = false;
+            if (clipRect) {
+                m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
+                clippingPushed = true;
+            }
+
+            try {
+                m_pRenderTarget->DrawText(
+                    &text[endSelectPos],
+                    static_cast<UINT32>(length - endSelectPos),
+                    m_pTextFormat,
+                    layoutRect,
+                    m_pTextBrush,
+                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+                );
+            }
+            catch (...) {
+                // 예외 처리
+            }
+
+            if (clippingPushed) {
+                m_pRenderTarget->PopAxisAlignedClip();
+            }
+        }
+    }
+    // 선택되지 않은 일반 텍스트 그리기
+    else {
+        D2D1_RECT_F layoutRect = D2D1::RectF(
+            x,
+            y,
+            x + static_cast<float>(m_width),
+            y + m_textMetrics.lineHeight
+        );
+
+        bool clippingPushed = false;
+        if (clipRect) {
+            m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
+            clippingPushed = true;
+        }
+
+        try {
+            m_pRenderTarget->DrawText(
+                text,
+                static_cast<UINT32>(length),
+                m_pTextFormat,
+                layoutRect,
+                m_pTextBrush,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+            );
+        }
+        catch (...) {
+            // 예외 처리
+        }
+
+        if (clippingPushed) {
+            m_pRenderTarget->PopAxisAlignedClip();
+        }
+    }
+}
+
+void D2Render::DrawLineText(float x, float y, const D2D1_RECT_F* clipRect, const wchar_t* text, size_t length) {
+    if (!m_initialized || !m_pRenderTarget || !m_pLineNumFormat || !text || length == 0) {
+        return;
+    }
+
+    // 라인 번호 텍스트 그리기
+    D2D1_RECT_F layoutRect = D2D1::RectF(
+        x,
+        y,
+        x + 100.0f,  // 넉넉한 너비
+        y + m_textMetrics.lineHeight
+    );
+    //TRACE(L"layoutRect = (%.1f, %.1f, %.1f, %.1f)\n", layoutRect.left, layoutRect.top, layoutRect.right, layoutRect.bottom);
+    if (clipRect) {
+        // 클리핑 적용을 위한 레이어 생성
+        D2D1_RECT_F clippedRect = *clipRect;
+        m_pRenderTarget->PushAxisAlignedClip(clippedRect, D2D1_ANTIALIAS_MODE_ALIASED);
+    }
+    m_pRenderTarget->DrawText(
+        text,
+        static_cast<UINT32>(length),
+        m_pLineNumFormat,
+        layoutRect,
+        m_pLineNumBrush,
+        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+    );
+    if (clipRect) {
+        // 클리핑 레이어 제거
+        m_pRenderTarget->PopAxisAlignedClip();
+    }
+}
+
+void D2Render::UpdateTextMetrics() {
+    if (!m_initialized || !m_pDWriteFactory || !m_pTextFormat) {
+        return;
+    }
+
+    // 폰트 정보 조회를 위한 텍스트 레이아웃 생성
+    CComPtr<IDWriteTextLayout> textLayout;
+    HRESULT hr = m_pDWriteFactory->CreateTextLayout(
+        L"Aygj|한글",  // 여러 문자를 포함하여 측정
+        5,
+        m_pTextFormat,
+        static_cast<float>(m_width),
+        static_cast<float>(m_height),
+        &textLayout
+    );
+
+    if (FAILED(hr) || !textLayout) {
+        return;
+    }
+
+    DWRITE_TEXT_METRICS textMetrics;
+    hr = textLayout->GetMetrics(&textMetrics);
+    if (FAILED(hr)) {
+        return;
+    }
+
+    DWRITE_LINE_METRICS lineMetrics;
+    UINT32 lineCount = 1;
+    hr = textLayout->GetLineMetrics(&lineMetrics, 1, &lineCount);
+    if (FAILED(hr) || lineCount == 0) {
+        return;
+    }
+
+    // 폰트 콜렉션 및 폰트 패밀리 가져오기
+    CComPtr<IDWriteFontCollection> fontCollection;
+    hr = m_pTextFormat->GetFontCollection(&fontCollection);
+    if (FAILED(hr) || !fontCollection) {
+        return;
+    }
+
+    UINT32 fontFamilyIndex;
+    BOOL fontFamilyExists;
+    hr = fontCollection->FindFamilyName(m_fontName.c_str(), &fontFamilyIndex, &fontFamilyExists);
+    if (FAILED(hr) || !fontFamilyExists) {
+        return;
+    }
+
+    CComPtr<IDWriteFontFamily> fontFamily;
+    hr = fontCollection->GetFontFamily(fontFamilyIndex, &fontFamily);
+    if (FAILED(hr) || !fontFamily) {
+        return;
+    }
+
+    // 폰트 정보 가져오기
+    CComPtr<IDWriteFont> font;
+    hr = fontFamily->GetFirstMatchingFont(m_fontWeight, DWRITE_FONT_STRETCH_NORMAL, m_fontStyle, &font);
+    if (FAILED(hr) || !font) {
+        return;
+    }
+
+    // 메트릭스 가져오기
+    DWRITE_FONT_METRICS fontMetrics;
+    font->GetMetrics(&fontMetrics);
+
+    // 텍스트 메트릭스 업데이트
+    float designUnitsToPixels = m_fontSize / fontMetrics.designUnitsPerEm;
+
+    m_textMetrics.ascent = fontMetrics.ascent * designUnitsToPixels;
+    m_textMetrics.descent = fontMetrics.descent * designUnitsToPixels;
+    m_textMetrics.lineGap = fontMetrics.lineGap * designUnitsToPixels;
+    m_textMetrics.capHeight = fontMetrics.capHeight * designUnitsToPixels;
+    m_textMetrics.xHeight = fontMetrics.xHeight * designUnitsToPixels;
+    m_textMetrics.underlinePosition = fontMetrics.underlinePosition * designUnitsToPixels;
+    m_textMetrics.underlineThickness = fontMetrics.underlineThickness * designUnitsToPixels;
+    m_textMetrics.strikethroughPosition = fontMetrics.strikethroughPosition * designUnitsToPixels;
+    m_textMetrics.strikethroughThickness = fontMetrics.strikethroughThickness * designUnitsToPixels;
+    m_textMetrics.lineHeight = lineMetrics.height;
+}
+
+bool D2Render::CreateTextFormat() {
+    if (!m_pDWriteFactory) {
+        return false;
+    }
+
+    // 기존 텍스트 포맷 해제
+    m_pTextFormat = nullptr;
+    m_pLineNumFormat = nullptr;
+
+    // 메인 텍스트 포맷 생성
+    HRESULT hr = m_pDWriteFactory->CreateTextFormat(
+        m_fontName.c_str(),
+        nullptr,
+        m_fontWeight,
+        m_fontStyle,
+        DWRITE_FONT_STRETCH_NORMAL,
+        m_fontSize,
+        L"ko-kr",
+        &m_pTextFormat
+    );
+
+    if (FAILED(hr) || !m_pTextFormat) {
+        // 실패 시 기본 폰트 사용
+        hr = m_pDWriteFactory->CreateTextFormat(
+            L"Arial", // 기본 고정폭 폰트
+            nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            12.0f,
+            L"en-us",
+            &m_pTextFormat
+        );
+
+        if (FAILED(hr) || !m_pTextFormat) {
+            return false;
+        }
+    }
+
+    // 라인번호 텍스트 포맷 생성
+    hr = m_pDWriteFactory->CreateTextFormat(
+        m_fontName.c_str(),
+        nullptr,
+        DWRITE_FONT_WEIGHT_BOLD, //m_fontWeight,
+        m_fontStyle,
+        DWRITE_FONT_STRETCH_NORMAL,
+        m_fontSize,
+        L"ko-kr",
+        &m_pLineNumFormat
+    );
+
+    if (FAILED(hr) || !m_pLineNumFormat) {
+        // 실패 시 기본 폰트 사용
+        hr = m_pDWriteFactory->CreateTextFormat(
+            L"Arial", // 기본 고정폭 폰트
+            nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            12.0f,
+            L"en-us",
+            &m_pLineNumFormat
+        );
+
+        if (FAILED(hr) || !m_pLineNumFormat) {
+            return false;
+        }
+    }
+
+    // 텍스트 정렬 설정
+    m_pTextFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    m_pTextFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    m_pTextFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+    m_pLineNumFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    m_pLineNumFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    m_pLineNumFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+    return true;
+}
+
+bool D2Render::CreateBrushes() {
+    if (!m_pRenderTarget) {
+        return false;
+    }
+
+    // 텍스트 브러시 생성
+    if (!m_pTextBrush) {
+        HRESULT hr = m_pRenderTarget->CreateSolidColorBrush(m_textColor, &m_pTextBrush);
+        if (FAILED(hr) || !m_pTextBrush) {
+            return false;
+        }
+    }
+    else {
+        m_pTextBrush->SetColor(m_textColor);
+    }
+
+    // 배경 브러시 생성
+    if (!m_pBgBrush) {
+        HRESULT hr = m_pRenderTarget->CreateSolidColorBrush(m_bgColor, &m_pBgBrush);
+        if (FAILED(hr)) {
+            // 배경 브러시 실패는 치명적이지 않음
+        }
+    }
+    else {
+        m_pBgBrush->SetColor(m_bgColor);
+    }
+
+    // 선택된 텍스트 브러시 생성
+    if (!m_pSelectedTextBrush) {
+        HRESULT hr = m_pRenderTarget->CreateSolidColorBrush(m_selectedTextColor, &m_pSelectedTextBrush);
+        if (FAILED(hr)) {
+            // 선택된 텍스트 브러시 실패는 치명적이지 않음
+        }
+    }
+    else {
+        m_pSelectedTextBrush->SetColor(m_selectedTextColor);
+    }
+
+    // 선택된 배경 브러시 생성
+    if (!m_pSelectedBgBrush) {
+        HRESULT hr = m_pRenderTarget->CreateSolidColorBrush(m_selectedBgColor, &m_pSelectedBgBrush);
+        if (FAILED(hr)) {
+            // 선택된 배경 브러시 실패는 치명적이지 않음
+        }
+    }
+    else {
+        m_pSelectedBgBrush->SetColor(m_selectedBgColor);
+    }
+
+    // 라인넘버 브러시 생성
+    if (!m_pLineNumBrush) {
+        HRESULT hr = m_pRenderTarget->CreateSolidColorBrush(m_lineNumColor, &m_pLineNumBrush);
+        if (FAILED(hr) || !m_pLineNumBrush) {
+            return false;
+        }
+    }
+    else {
+        m_pLineNumBrush->SetColor(m_lineNumColor);
+    }
+
+    return true; // 텍스트 브러시가 생성됨
+}
+
+void D2Render::LogRenderTargetState() {
+    TRACE(L"--- D2Render 상태 ---\n");
+    TRACE(L"초기화 상태: %s\n", m_initialized ? L"초기화됨" : L"초기화되지 않음");
+    TRACE(L"렌더타겟: %p\n", m_pRenderTarget.p);
+
+    if (m_pRenderTarget) {
+        D2D1_SIZE_F size = m_pRenderTarget->GetSize();
+        TRACE(L"렌더타겟 크기: 너비=%.1f, 높이=%.1f\n", size.width, size.height);
+
+        HRESULT testState = m_pRenderTarget->CheckWindowState();
+        TRACE(L"윈도우 상태: %s (0x%08X)\n",
+            (testState == D2D1_WINDOW_STATE_OCCLUDED) ? L"가려짐" :
+            (testState == S_OK) ? L"정상" : L"기타",
+            testState);
+    }
+    TRACE(L"----------------------\n");
 }
