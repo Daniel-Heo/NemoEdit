@@ -57,6 +57,9 @@ NemoEdit::NemoEdit()
     // IME
 	m_imeComposition.isComposing = false;
 
+	// 단어 경계 검사
+	InitializeWordDelimiters();
+
 #ifdef _DEBUG
     // 디버그 모드에서만 실행되는 코드
     _CrtSetDbgFlag(0); // 메모리 누수 보고 비활성화 : 대용량 시에 기다리는 시간이 아까워서.
@@ -81,7 +84,6 @@ BOOL NemoEdit::Create(DWORD dwStyle, const RECT& rect, CWnd* pParentWnd, UINT nI
                           rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
                           pParentWnd->GetSafeHwnd(), (HMENU)(UINT_PTR)nID);
 
-    TRACE(L"Create start\n");
     // CreateEx 실행 후 Z-order 설정 추가
     if (res) {
         // Z-order를 맨 아래로 설정
@@ -103,7 +105,6 @@ BOOL NemoEdit::Create(DWORD dwStyle, const RECT& rect, CWnd* pParentWnd, UINT nI
         m_d2Render.SetSelectionColors(m_colorInfo.text, m_colorInfo.select);
 
         m_lineHeight = m_d2Render.GetLineHeight();
-        TRACE(L"m_lineHeight=%d\n", m_lineHeight);
         m_charWidth = m_charWidth = GetTextWidth(L"080") - GetTextWidth(L"08");
 
         CRect client;
@@ -466,10 +467,10 @@ void NemoEdit::AddText(std::wstring text) {
     int insertIndex = (int)m_rope.getSize();
 
     // Undo 레코드 준비
-    UndoRecord rec;
-    rec.type = UndoRecord::Insert;
-    rec.start = TextPos(insertIndex, 0);
-    rec.text = text;  // 원본 텍스트 그대로 저장
+    //UndoRecord rec;
+    //rec.type = UndoRecord::Insert;
+    //rec.start = TextPos(insertIndex, 0);
+    //rec.text = text;  // 원본 텍스트 그대로 저장
 
     size_t endColumn = lines.back().length(); // lines가 insert 후에 사라지기 때문에 그전에 값을 얻어놓음.
 
@@ -495,8 +496,8 @@ void NemoEdit::AddText(std::wstring text) {
     m_selectInfo.isSelecting = false;
 
     // Undo/Redo 스택 갱신
-    m_undoStack.push_back(rec);
-    m_redoStack.clear();
+    //m_undoStack.push_back(rec);
+    //m_redoStack.clear();
 
     // 화면 갱신 및 커서 위치 보정
     EnsureCaretVisible();
@@ -521,13 +522,16 @@ void NemoEdit::ClearText() {
 // Tab 문자를 주어진 크기의 공백으로 변환하는 함수
 std::wstring NemoEdit::ExpandTabs(const std::wstring& text) {
     // 결과를 저장할 문자열
-    std::wstring result = L"";
+    std::wstring result;
+    result.reserve(text.length() * 2);
+    // 탭용 공백 문자열을 미리 한 번만 생성
+    const std::wstring tabSpaces(m_tabSize, L' ');
 
     // 입력 문자열을 순회하며 탭을 공백으로 변환
-    for (size_t i = 0; i < text.length(); i++) {
+    for (size_t i = 0; i < text.length(); ++i) {
         if (text[i] == L'\t') {
             // 탭 문자 발견 시 지정된 수의 공백 추가
-            result.append(std::wstring(m_tabSize, L' '));
+            result.append(tabSpaces);
         }
         else {
             // 일반 문자는 그대로 복사
@@ -573,6 +577,147 @@ void NemoEdit::HandleTripleClick(CPoint point)
     // 화면 갱신
     UpdateCaretPosition();
     Invalidate(FALSE);
+}
+
+// 구분자 배열 초기화
+void NemoEdit::InitializeWordDelimiters() {
+    // 배열 초기화 (모두 false로 설정)
+    memset(isDivChar, 0, sizeof(isDivChar));
+
+    // ASCII 범위 내의 문자들에 대한 구분자 설정
+    // 공백 문자
+    isDivChar[' '] = true;
+    isDivChar['\t'] = true;
+    isDivChar['\r'] = true;
+    isDivChar['\n'] = true;
+
+    // 구두점
+    isDivChar['.'] = true;
+    isDivChar[','] = true;
+    isDivChar[';'] = true;
+    isDivChar[':'] = true;
+    isDivChar['!'] = true;
+    isDivChar['?'] = true;
+    isDivChar['\''] = true;
+    isDivChar['"'] = true;
+    isDivChar['`'] = true;
+
+    // 괄호
+    isDivChar['('] = true;
+    isDivChar[')'] = true;
+    isDivChar['['] = true;
+    isDivChar[']'] = true;
+    isDivChar['{'] = true;
+    isDivChar['}'] = true;
+    isDivChar['<'] = true;
+    isDivChar['>'] = true;
+
+    // 연산자 및 기타 특수문자
+    isDivChar['+'] = true;
+    isDivChar['-'] = true;
+    isDivChar['*'] = true;
+    isDivChar['/'] = true;
+    isDivChar['='] = true;
+    isDivChar['&'] = true;
+    isDivChar['|'] = true;
+    isDivChar['^'] = true;
+    isDivChar['~'] = true;
+    isDivChar['@'] = true;
+    isDivChar['#'] = true;
+    isDivChar['$'] = true;
+    isDivChar['%'] = true;
+    isDivChar['\\'] = true;
+
+    // 주의: 언더스코어(_)는 구분자로 처리하지 않음 (프로그래밍 변수명에 포함)
+}
+
+// 단어 구분자인지 확인
+bool NemoEdit::IsWordDelimiter(wchar_t ch) {
+    // ASCII 범위 내 문자는 미리 계산된 배열 사용
+    if (ch < 256) {
+        return isDivChar[ch];
+    }
+
+    // ASCII 범위 밖의 문자는 공백이나 구두점인지만 확인
+    return iswspace(ch) || iswpunct(ch) && ch != L'_';
+}
+
+// 특정 위치의 단어 경계 찾기 (단순화 버전)
+void NemoEdit::FindWordBoundary(const std::wstring& text, int position, int& start, int& end) {
+    int length = static_cast<int>(text.length());
+
+    // 빈 문자열이거나 범위를 벗어난 경우
+    if (length == 0 || position < 0 || position >= length) {
+        start = end = position;
+        return;
+    }
+
+    wchar_t currentChar = text[position];
+    bool isDelimiter = IsWordDelimiter(currentChar);
+
+    // 현재 위치가 단어 구분자인 경우
+    if (isDelimiter) {
+        // 같은 종류의 구분자 그룹으로 확장
+        bool isSpace = iswspace(currentChar);
+
+        // 시작 위치 찾기
+        start = position;
+        while (start > 0) {
+            wchar_t prevChar = text[start - 1];
+
+            // 공백 문자 그룹
+            if (isSpace) {
+                if (!iswspace(prevChar)) break;
+            }
+            // 같은 구분자 그룹 (예: === 또는 --- 등)
+            else if (currentChar == prevChar) {
+                // 계속 확장
+            }
+            // 다른 구분자면 중단
+            else {
+                break;
+            }
+
+            start--;
+        }
+
+        // 끝 위치 찾기
+        end = position;
+        while (end < length - 1) {
+            wchar_t nextChar = text[end + 1];
+
+            // 공백 문자 그룹
+            if (isSpace) {
+                if (!iswspace(nextChar)) break;
+            }
+            // 같은 구분자 그룹
+            else if (currentChar == nextChar) {
+                // 계속 확장
+            }
+            // 다른 구분자면 중단
+            else {
+                break;
+            }
+
+            end++;
+        }
+    }
+    // 일반 단어의 경우
+    else {
+        // 단어 시작 위치 찾기
+        start = position;
+        while (start > 0 && !IsWordDelimiter(text[start - 1])) {
+            start--;
+        }
+
+        // 단어 끝 위치 찾기
+        end = position;
+        while (end < length - 1 && !IsWordDelimiter(text[end + 1])) {
+            end++;
+        }
+    }
+
+    end++; // 끝 위치는 마지막 문자 다음 위치
 }
 
 // 선택된 텍스트 클립보드로 복사
@@ -800,8 +945,100 @@ void NemoEdit::Undo() {
             m_caretPos.column = (int)parts.back().length();
         }
     }
+    else if (rec.type == UndoRecord::Replace) {
+        // Replace 취소 (지정된 범위를 원본 텍스트로 교체)
 
-    // Redo 스택에 추가
+        // 현재 텍스트 저장 (Redo에서 사용)
+        std::wstring currentText = m_rope.getTextRange(
+            rec.start.lineIndex, 0,
+            rec.end.lineIndex, m_rope.getLineSize(rec.end.lineIndex)
+        );
+
+        // 먼저 처리할 라인 범위 확인
+        int startLine = rec.start.lineIndex;
+        int endLine = rec.end.lineIndex;
+
+        // 원본 텍스트를 라인별로 분할하여 처리
+        std::list<std::wstring> originalLines;
+        size_t pos = 0;
+        size_t nlPos;
+
+        // 개행 기준으로 원본 텍스트 분할
+        while (pos < rec.text.size()) {
+            nlPos = rec.text.find(L'\n', pos);
+
+            if (nlPos == std::wstring::npos) {
+                // 마지막 라인
+                originalLines.push_back(rec.text.substr(pos));
+                break;
+            }
+            else {
+                // 중간 라인 (CR 제거)
+                std::wstring line = rec.text.substr(pos, nlPos - pos);
+                if (!line.empty() && line.back() == L'\r') {
+                    line.pop_back();
+                }
+                originalLines.push_back(line);
+                pos = nlPos + 1;
+            }
+        }
+
+        // 빈 텍스트인 경우 빈 라인 추가
+        if (originalLines.empty()) {
+            originalLines.push_back(L"");
+        }
+
+        // 복원해야 할 라인 수 확인
+        int originalLineCount = static_cast<int>(originalLines.size());
+        int currentLineCount = endLine - startLine + 1;
+
+        // 기존 문서에 라인이 부족한 경우 빈 라인으로 채움
+        while (m_rope.getSize() <= endLine) {
+            m_rope.update(m_rope.getSize(), L"");
+        }
+
+        // 1. 원본 텍스트의 라인 수만큼 update 수행
+        auto lineIter = originalLines.begin();
+        for (int i = 0; i < originalLineCount && lineIter != originalLines.end(); i++) {
+            int lineIdx = startLine + i;
+
+            // 문서 범위 내에 있는지 확인
+            if (lineIdx < m_rope.getSize()) {
+                m_rope.update(lineIdx, *lineIter);
+            }
+
+            ++lineIter;
+        }
+
+        // 선택 영역 복원 - 저장된 선택 영역 정보 사용
+        if (rec.startSelect.lineIndex >= 0 && rec.endSelect.lineIndex >= 0) {
+            m_selectInfo.start = rec.startSelect;
+            m_selectInfo.end = rec.endSelect;
+            m_selectInfo.anchor = rec.startSelect;
+            m_selectInfo.isSelected = true;
+            m_selectInfo.isSelecting = false;
+        }
+
+        // 캐럿 위치 조정
+        m_caretPos = m_selectInfo.end;
+
+        // Redo 레코드 생성
+        UndoRecord redoRec = rec;
+        redoRec.text = currentText;
+        redoRec.startSelect = m_selectInfo.start;
+        redoRec.endSelect = m_selectInfo.end;
+
+        // Redo 스택에 추가
+        m_redoStack.push_back(redoRec);
+
+        // 화면 갱신 후 반환
+        EnsureCaretVisible();
+        RecalcScrollSizes();
+        Invalidate(FALSE);
+        return;
+    }
+
+    // Redo 스택에 추가 (Replace 타입 제외, 이미 처리됨)
     m_redoStack.push_back(rec);
 
     // 화면 갱신
@@ -894,8 +1131,68 @@ void NemoEdit::Redo() {
             }
         }
     }
+    else if (rec.type == UndoRecord::Replace) {
+        // Replace 다시 실행 (지정된 범위를 새 텍스트로 교체)
+
+        // 현재 텍스트 저장 (Undo에서 사용)
+        std::wstring currentText = m_rope.getTextRange(
+            rec.start.lineIndex, 0,
+            rec.end.lineIndex, m_rope.getLineSize(rec.end.lineIndex)
+        );
+
+        // 먼저 처리할 라인 범위 확인
+        int startLine = rec.start.lineIndex;
+        int endLine = rec.end.lineIndex;
+
+        // 선택 영역의 텍스트를 새 텍스트로 교체
+        std::vector<std::wstring> parts;
+        SplitTextByNewlines(rec.text, parts);
+
+        // 첫 번째 라인 업데이트
+        m_rope.update(startLine, parts[0]);
+
+        // 중간 라인 처리: 기존 라인 삭제 후 새 라인 삽입
+        // 1. 첫 번째 라인 이후부터 마지막 라인까지 모두 삭제
+        for (int i = endLine; i > startLine; i--) {
+            m_rope.erase(i);
+        }
+
+        // 2. 새 라인 삽입
+        for (size_t i = 1; i < parts.size(); i++) {
+            m_rope.insert(startLine + i, parts[i]);
+        }
+
+        // 선택 영역 복원 - 저장된 selectStart와 selectEnd 사용
+        if (rec.startSelect.lineIndex >= 0 && rec.endSelect.lineIndex >= 0) {
+            m_selectInfo.start = rec.startSelect;
+            m_selectInfo.end = rec.endSelect;
+            m_selectInfo.anchor = rec.startSelect;
+            m_selectInfo.isSelected = true;
+            m_selectInfo.isSelecting = false;
+        }
+
+        // 캐럿 위치 조정
+        m_caretPos = m_selectInfo.end;
+
+        // Undo 레코드 생성 (원래 텍스트와 위치 정보 포함)
+        UndoRecord undoRec = rec;
+        undoRec.text = currentText;
+
+        // 선택 영역 정보 유지
+        undoRec.startSelect = m_selectInfo.start;
+        undoRec.endSelect = m_selectInfo.end;
 
     // Undo 스택에 추가
+        m_undoStack.push_back(undoRec);
+
+        // 화면 갱신 후 반환
+        EnsureCaretVisible();
+        RecalcScrollSizes();
+        Invalidate(FALSE);
+        return;
+    }
+
+    // Undo 스택에 추가 (Replace 타입 제외, 이미 처리됨)
     m_undoStack.push_back(rec);
 
     // 화면 갱신
@@ -1128,6 +1425,168 @@ void NemoEdit::SplitTextByNewlines(const std::wstring& text, std::vector<std::ws
     }
 }
 
+// 여러 줄 선택 시 탭 추가 처리 메서드
+void NemoEdit::AddTabToSelectedLines() {
+    if (!m_selectInfo.isSelected) return;
+
+    // 선택 영역의 시작과 끝 정규화
+    TextPos start = m_selectInfo.start;
+    TextPos end = m_selectInfo.end;
+    if (end.lineIndex < start.lineIndex ||
+        (end.lineIndex == start.lineIndex && end.column < start.column)) {
+        start = m_selectInfo.end;
+        end = m_selectInfo.start;
+    }
+
+    // 한 줄만 선택된 경우 일반 탭 처리로 돌아감
+    if (start.lineIndex == end.lineIndex) return;
+
+    // 각 라인에 적용할 문자 준비 (탭 문자)
+    std::wstring tabStr(1, L'\t');
+
+    // 변경 전 선택된 라인들의 상태 저장
+    std::wstring originalText = m_rope.getTextRange(
+        start.lineIndex, 0,  // 첫 번째 선택 라인의 시작
+        end.lineIndex, m_rope.getLineSize(end.lineIndex)  // 마지막 선택 라인의 끝
+    );
+
+    // Replace 타입의 Undo 레코드 생성
+    UndoRecord rec;
+    rec.type = UndoRecord::Replace;  // Replace 타입: Undo 시 원본 텍스트로 전체 교체
+    rec.start = TextPos(start.lineIndex, 0);  // 첫 번째 선택 라인의 시작
+    rec.end = TextPos(end.lineIndex, m_rope.getLineSize(end.lineIndex));  // 마지막 선택 라인의 끝
+    rec.text = originalText;  // 변경 전 원본 텍스트
+    rec.startSelect = start;  // 원래 선택 영역 시작 (탭 추가 전)
+    rec.endSelect = end;     // 원래 선택 영역 끝 (탭 추가 전)
+
+    // 각 라인에 탭 추가
+    for (int lineIdx = start.lineIndex; lineIdx <= end.lineIndex; lineIdx++) {
+        std::wstring line = m_rope.getLine(lineIdx);
+        line.insert(0, tabStr);
+        m_rope.update(lineIdx, line);
+    }
+
+    // 캐럿 및 선택 영역 위치 조정
+    TextPos newStart = start;
+    TextPos newEnd = end;
+
+    // 탭이 추가되었으므로 선택 영역 열 위치 조정
+    newStart.column += 1;
+    newEnd.column += 1;
+
+    // 선택 영역 업데이트
+    m_selectInfo.start = newStart;
+    m_selectInfo.end = newEnd;
+    m_selectInfo.anchor = newStart;
+
+    // 캐럿 위치 업데이트
+    m_caretPos = newEnd;
+
+    // Undo 스택에 추가
+    m_undoStack.push_back(rec);
+    m_redoStack.clear();
+
+    // 화면 갱신
+    EnsureCaretVisible();
+    Invalidate(FALSE);
+}
+
+// 여러 줄 선택 시 탭 제거 처리 메서드 (Shift+Tab용)
+void NemoEdit::RemoveTabFromSelectedLines() {
+    if (!m_selectInfo.isSelected) return;
+
+    // 선택 영역의 시작과 끝 정규화
+    TextPos start = m_selectInfo.start;
+    TextPos end = m_selectInfo.end;
+    if (end.lineIndex < start.lineIndex ||
+        (end.lineIndex == start.lineIndex && end.column < start.column)) {
+        start = m_selectInfo.end;
+        end = m_selectInfo.start;
+    }
+
+    // 한 줄만 선택된 경우 일반 처리로 돌아감
+    if (start.lineIndex == end.lineIndex) return;
+
+    // 변경 전 선택된 라인들의 상태 저장
+    std::wstring originalText = m_rope.getTextRange(
+        start.lineIndex, 0,  // 첫 번째 선택 라인의 시작
+        end.lineIndex, m_rope.getLineSize(end.lineIndex)  // 마지막 선택 라인의 끝
+    );
+
+    // 각 라인에서 탭 제거
+    bool anyChanged = false;
+    for (int lineIdx = start.lineIndex; lineIdx <= end.lineIndex; lineIdx++) {
+        std::wstring line = m_rope.getLine(lineIdx);
+
+        // 라인이 탭이나 공백으로 시작하는지 확인
+        if (!line.empty()) {
+            if (line[0] == L'\t') {
+                // 첫 문자가 탭이면 제거
+                line.erase(0, 1);
+                m_rope.update(lineIdx, line);
+                anyChanged = true;
+            }
+            else if (line[0] == L' ') {
+                // 첫 문자가 공백이면 최대 탭 크기만큼의 공백 제거
+                int spacesToRemove = 0;
+                for (int i = 0; i < m_tabSize && i < line.length() && line[i] == L' '; i++) {
+                    spacesToRemove++;
+                }
+
+                if (spacesToRemove > 0) {
+                    line.erase(0, spacesToRemove);
+                    m_rope.update(lineIdx, line);
+                    anyChanged = true;
+                }
+            }
+        }
+    }
+
+    // 변경된 사항이 없으면 종료
+    if (!anyChanged) return;
+
+    // 변경 후 선택 영역 위치 조정
+    TextPos newStart = start;
+    TextPos newEnd = end;
+
+    // 시작 라인에서 들여쓰기가 제거되었으면 열 위치 조정
+    if (newStart.column > 0) {
+        newStart.column = max(0, newStart.column - 1);
+    }
+
+    // 끝 라인에서 들여쓰기가 제거되었으면 열 위치 조정
+    if (newEnd.column > 0) {
+        newEnd.column = max(0, newEnd.column - 1);
+    }
+
+    // 선택 영역 업데이트
+    m_selectInfo.start = newStart;
+    m_selectInfo.end = newEnd;
+    m_selectInfo.anchor = newStart;
+
+    // 캐럿 위치 업데이트
+    m_caretPos = newEnd;
+
+    // Replace 타입의 Undo 레코드 생성
+    UndoRecord rec;
+    rec.type = UndoRecord::Replace;  // Replace 타입: Undo 시 원본 텍스트로 전체 교체
+    rec.start = TextPos(start.lineIndex, 0);  // 첫 번째 선택 라인의 시작
+    rec.end = TextPos(end.lineIndex, m_rope.getLineSize(end.lineIndex));  // 마지막 선택 라인의 끝
+    rec.text = originalText;  // 변경 전 원본 텍스트
+
+    // 선택 영역 정보 정확히 저장
+    rec.startSelect = start;  // 원래 선택 영역 시작 (탭 제거 전)
+    rec.endSelect = end;     // 원래 선택 영역 끝 (탭 제거 전)
+
+    // Undo 스택에 추가
+    m_undoStack.push_back(rec);
+    m_redoStack.clear();
+
+    // 화면 갱신
+    EnsureCaretVisible();
+    Invalidate(FALSE);
+}
+
 // 새로운 문자를 현 위치에 삽입
 void NemoEdit::InsertChar(wchar_t ch) {
 	std::wstring addStr(1, ch);
@@ -1332,7 +1791,7 @@ std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
     if (lineText.empty()) return {}; // 빈 줄일 경우 워드랩 필요 없음
 
     // 한 줄 전체가 들어갈 경우
-    int lineWidth = GetTextWidth(lineText);
+    int lineWidth = GetTextWidth(ExpandTabs(lineText));
     if (lineWidth <= m_wordWrapWidth) {
         return {};
     }
@@ -1655,8 +2114,8 @@ void NemoEdit::EnsureCaretVisible() {
         else if (pt.y + m_lineHeight > screenHeight) {
             int totalLineCnt = 0;
             int wrapCnt = 0;
-            totalLineCnt -= (int)wrapPositions.size() - wrapLineIndex;
-            for (int i = m_caretPos.lineIndex; i > 0; i--) {
+            totalLineCnt = wrapLineIndex+1;
+            for (int i = m_caretPos.lineIndex-1; i >= 0; i--) {
                 wrapCnt = (int)FindWordWrapPosition(i).size() + 1; // 화면 줄수 + 워드랩 줄수
                 totalLineCnt += wrapCnt;
                 m_scrollYLine = i;
@@ -1669,6 +2128,12 @@ void NemoEdit::EnsureCaretVisible() {
                 }
             }
             pt.y = (visibleLines - 1) * m_lineHeight;
+        }
+        else {
+            // wrapLineIndex 변경 확인
+            wrapLineIndex = FindWordWrapPosition(m_scrollYLine).size();
+			if (m_scrollYWrapLine > wrapLineIndex)
+				m_scrollYWrapLine = wrapLineIndex;
         }
 
         // 캐럿이 안보일 경우에 스크롤 재계산 ( 워드랩이라 초과는 계산하지 않는다 )
@@ -1958,7 +2423,11 @@ void NemoEdit::OnPaint() {
             for (size_t i = 0; i < wrapPositions.size()+1; i++) {
 				if (skipLineCnt > 0) {
 					skipLineCnt--;
-                    startPos = wrapPositions[i];
+                    if (i>0 && i == wrapPositions.size()) {
+                        // 마지막 라인 처리
+                        startPos = wrapPositions[i-1];
+                    }
+                    else startPos = wrapPositions[i];
 					continue;
 				}
                 // 화면 밖으로 나가면 중단
@@ -2069,7 +2538,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
 
     // 이 세그먼트 내 선택 영역 계산
     bool hasSelection = m_selectInfo.isSelected;
-    size_t selStartCol = 0, selEndCol = 0;
+    int selStartCol = 0, selEndCol = 0;
 
     if (hasSelection) {
         // 선택 영역 정규화
@@ -2086,21 +2555,25 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
         if (lineIndex >= s.lineIndex && lineIndex <= e.lineIndex) {
             // 한라인에만 선택 영역이 존재할 경우
             if (s.lineIndex == e.lineIndex) {
-                selStartCol = s.column;
-                selEndCol = e.column;
+                selStartCol = s.column-segStartIdx;
+				if (selStartCol < 0) selStartCol = 0; // 세그먼트 시작보다 작으면 0으로 설정
+                selEndCol = e.column-segStartIdx;
+				if (selEndCol <= selStartCol) selEndCol = selStartCol; // 선택 영역이 유효하지 않으면 0으로 설정
             }
             // 현재 라인이 선택 영역의 시작인 경우
             else if (lineIndex == s.lineIndex) {
-                selStartCol = s.column;
-                selEndCol = segText.size()+segStartIdx;
+                selStartCol = s.column-segStartIdx;
+				if (selStartCol < 0) selStartCol = 0; // 세그먼트 시작보다 작으면 0으로 설정
+                selEndCol = segText.size();
             }
             else if (lineIndex == e.lineIndex) {
                 selStartCol = 0;
-                selEndCol = e.column;
+                selEndCol = e.column-segStartIdx;
+				if (selEndCol <= selStartCol) selEndCol = selStartCol; // 선택 영역이 유효하지 않으면 0으로 설정
             }
             else {
                 selStartCol = 0;
-                selEndCol = segText.size()+segStartIdx;
+                selEndCol = segText.size();
             }
 
             // 출력라인에 선택영역이 존재할 경우 탭 확장 적용
@@ -2117,27 +2590,7 @@ void NemoEdit::DrawSegment(int lineIndex, size_t segStartIdx, const std::wstring
     D2D1_RECT_F clipRect = D2D1::RectF(max(xOffset, x), y, min(client.Width(), x + textSize.cx), y + m_lineHeight);
 
     if (hasSelection && selEndCol > selStartCol) {
-        // 텍스트와 겹치는 선택 범위 구하기
-        size_t segEndIdx = segStartIdx + segText.size();
-        if (selStartCol >= segEndIdx || selEndCol<=segStartIdx) {
-            // 선택 부분이 이 세그먼트에 겹치지 않음 - 최적화된 그리기
-            m_d2Render.DrawEditText(x, y, &clipRect, tabText.c_str(), tabText.size());
-            return;
-        }
-
-        // 세그먼트와 겹치는 선택 범위 구하기
-        size_t drawSelStart = max(segStartIdx, selStartCol); // 선택 시작 위치
-        size_t drawSelEnd = min(segStartIdx + tabText.size(), selEndCol); // 선택 끝 위치 (현재 세그먼트 범위 내로 제한)
-
-        // 선택 범위가 유효한지 확인 (끝이 시작보다 뒤에 있는지)
-        if (drawSelEnd < drawSelStart) {
-            drawSelEnd = drawSelStart;
-        }
-
-        size_t relSelStart = drawSelStart - segStartIdx; // 세그먼트 내 선택 시작 위치
-        size_t relSelEnd = drawSelEnd - segStartIdx; // 세그먼트 내 선택 끝 위치
-
-        m_d2Render.DrawEditText(x, y, &clipRect, tabText.c_str(), tabText.size(), true, relSelStart, relSelEnd);
+        m_d2Render.DrawEditText(x, y, &clipRect, tabText.c_str(), tabText.size(), true, selStartCol, selEndCol);
     }
     else {
         // 선택 없는 경우 - 클리핑된 영역만 효율적으로 그리기
@@ -2419,19 +2872,18 @@ void NemoEdit::OnLButtonDblClk(UINT nFlags, CPoint point)
         return;
     }
 
-    std::wstring& lineText = m_rope.getLine(pos.lineIndex);
-    // 선택할 단어의 시작과 끝 인덱스 찾기
-    int wordStart=pos.column;
-    int wordEnd=pos.column;
-	while (wordStart > 0 && lineText[wordStart - 1]!=' ') {
-		wordStart--;
-	}
-	while (wordEnd < (int)lineText.size() && lineText[wordEnd] != ' ') {
-		wordEnd++;
-	}
+    // 현재 라인의 텍스트 가져오기
+    std::wstring lineText = m_rope.getLine(pos.lineIndex);
+
+    // 단어 경계 찾기 (단순화된 버전)
+    int wordStart, wordEnd;
+    FindWordBoundary(lineText, pos.column, wordStart, wordEnd);
+
     // 선택된 내용이 없으면 중단
-	if (wordStart == wordEnd) 
+    if (wordStart == wordEnd) {
+        CWnd::OnLButtonDblClk(nFlags, point);
         return;
+    }
 
     // 선택 영역 설정 (단어 끝은 포함해야 하므로 +1)
     m_selectInfo.start.lineIndex = pos.lineIndex;
@@ -2439,11 +2891,11 @@ void NemoEdit::OnLButtonDblClk(UINT nFlags, CPoint point)
     m_selectInfo.end.lineIndex = pos.lineIndex;
     m_selectInfo.end.column = wordEnd;
     m_selectInfo.isSelected = true;  // 단어가 선택되었으므로 true로 설정
+    m_selectInfo.anchor = m_selectInfo.start;
 
     // 캐럿은 단어의 끝에 위치
     m_caretPos.lineIndex = pos.lineIndex;
     m_caretPos.column = wordEnd;
-    m_selectInfo.anchor = m_selectInfo.start;
 
     UpdateCaretPosition();
     Invalidate(FALSE);
@@ -2651,13 +3103,7 @@ void NemoEdit::OnChar(UINT nChar, UINT nRepCnt, UINT nFlags) {
         // Backspace(8)나 Delete(127)는 OnKeyDown에서 처리
         return;
     }
-    if(nChar == '\t') {
-        // Tab 입력: 4칸 공백 삽입
-        InsertChar(L'\t');
-        EnsureCaretVisible();
-        Invalidate(FALSE);
-        return;
-    }
+
     if(nChar == '\r' || nChar == '\n') {
         // Enter 입력: 새 줄 삽입
         if (m_selectInfo.isSelected) {
@@ -2835,6 +3281,35 @@ void NemoEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags) {
         } else {
             DeleteChar(true);
         }
+        break;
+    case VK_TAB:
+        if (m_isReadOnly) return;
+
+        // 여러 줄 선택 시 특별 처리
+        if (m_selectInfo.isSelected) {
+            if (m_selectInfo.start.lineIndex != m_selectInfo.end.lineIndex) {
+                // Shift+Tab 처리는 추후 구현 가능
+                if (shift) {
+                    RemoveTabFromSelectedLines(); // 탭 제거 기능 구현 시 주석 해제
+                    return;
+                }
+                else {
+                    AddTabToSelectedLines();
+                }
+                return; // 이벤트 처리 완료
+            }
+			else {
+                // TODO : 이거 undo 2번 해야됨. -> 한번으로 조정해야 됨.
+                DeleteSelection();
+                InsertChar(L'\t');
+			}
+        }
+        else {
+            // 일반 탭 처리 (기존 코드)
+            InsertChar(L'\t');
+        }
+        EnsureCaretVisible();
+        Invalidate(FALSE);
         break;
     default:
         break;
@@ -4124,7 +4599,7 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
     }
 
     // 부분 선택 여부 확인
-    bool isPartialSelection = selected && (startSelectPos > 0 || endSelectPos < static_cast<int>(length));
+    bool isPartialSelection = selected && startSelectPos!= endSelectPos && (startSelectPos > 0 || endSelectPos < static_cast<int>(length));
 
     // 전체 선택이면 기존 동작 사용
     if (selected && !isPartialSelection) {
@@ -4253,7 +4728,7 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
         D2D1_RECT_F layoutRect = D2D1::RectF(
             x + preWidth,
             y,
-            x + static_cast<float>(m_width),
+            x + preWidth + selectWidth,
             y + m_textMetrics.lineHeight
         );
 

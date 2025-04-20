@@ -298,8 +298,11 @@ public:
 protected:
 
     struct UndoRecord {
-        enum Type { Insert, Delete } type;
+        enum Type { Insert, Delete, Replace } type;
         TextPos start;
+        TextPos end;
+        TextPos startSelect;
+        TextPos endSelect;
         std::wstring text;
     };
 
@@ -342,6 +345,8 @@ private:
     int GetTextWidth(const std::wstring& line); // 문자의 길이를 캐싱된 데이터로 계산
 	std::vector<int> FindWordWrapPosition(int lineIndex); // 자동 줄바꿈 위치 찾기
 	void SplitTextByNewlines(const std::wstring& text, std::vector<std::wstring>& parts); // 텍스트를 줄바꿈 문자로 분리
+    void AddTabToSelectedLines();      // 여러 줄 선택 시 탭 추가 처리 메서드
+    void RemoveTabFromSelectedLines(); // 여러 줄 선택 시 탭 제거 처리 메서드
 	// 캐럿 관련
     CPoint GetCaretPixelPos(const TextPos& pos);
     TextPos GetTextPosFromPoint(CPoint pt);
@@ -367,6 +372,10 @@ private:
     std::wstring ExpandTabs(const std::wstring& text); // \t을 space * tabSize로 치환
     int TabCount(const std::wstring& text, int endPos);
 	void HandleTripleClick(CPoint point); // 트리플 클릭 처리
+    // 단어 경계 검사
+    void InitializeWordDelimiters();        // 구분자 초기화 함수
+    bool IsWordDelimiter(wchar_t ch);      // 구분자 확인
+    void FindWordBoundary(const std::wstring& text, int position, int& start, int& end);  // 단어 경계 찾기
 
     // 내부 데이터
 	Rope m_rope; // 텍스트 데이터를 관리하는 Rope 객체
@@ -415,6 +424,9 @@ private:
     // Undo/Redo 스택
     std::vector<UndoRecord> m_undoStack;
     std::vector<UndoRecord> m_redoStack;
+
+    // 단어 경계 검사
+    bool isDivChar[256];                   // 구분자 빠른 검색을 위한 배열
 public:
     virtual BOOL PreTranslateMessage(MSG* pMsg);
 };
