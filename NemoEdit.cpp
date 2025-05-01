@@ -3611,7 +3611,7 @@ std::wstring Rope::getText() {
     std::wstring text = L"";
     int lineCnt = 0;
     for (const auto& line : lines) {
-        if (lineCnt++ > 0) text += L"\n";
+        if (lineCnt++ > 0) text += L"\r\n";
         text += line;
     }
     return text;
@@ -3633,13 +3633,13 @@ std::wstring Rope::getTextRange(size_t startLineIndex, size_t startLineColumn, s
     else {
         // 여러 라인에 걸쳐 선택
         text += itStart->substr(startLineColumn);
-        text += L"\n";
+        text += L"\r\n";
         if (endLineIndex - startLineIndex > 1) {
             auto it = std::next(itStart);
             for (size_t line = startLineIndex + 1; line < endLineIndex; line++) {
                 if (it == lines.end()) break;
                 text += *it;
-                text += L"\n";
+                text += L"\r\n";
                 ++it;
             }
         }
