@@ -720,6 +720,127 @@ void NemoEdit::FindWordBoundary(const std::wstring& text, int position, int& sta
     end++; // 끝 위치는 마지막 문자 다음 위치
 }
 
+/* -------------------------------------------------------
+ * Undo 헬퍼 함수 구현
+ * -----------------------------------------------------*/
+
+// 현재 상태를 레코드에 저장
+void NemoEdit::SaveCurrentState(UndoRecord& record) {
+    record.caretPos = m_caretPos;
+    record.hadSelection = m_selectInfo.isSelected;
+    if (record.hadSelection) {
+        record.selectStart = m_selectInfo.start;
+        record.selectEnd = m_selectInfo.end;
+    }
+}
+
+// 레코드로부터 상태 복원
+void NemoEdit::RestoreState(const UndoRecord& record) {
+    m_caretPos = record.caretPos;
+
+    if (record.hadSelection) {
+        m_selectInfo.start = record.selectStart;
+        m_selectInfo.end = record.selectEnd;
+        m_selectInfo.anchor = record.selectStart;
+        m_selectInfo.isSelected = true;
+        m_selectInfo.isSelecting = false;
+    }
+    else {
+        m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
+        m_selectInfo.isSelected = false;
+        m_selectInfo.isSelecting = false;
+    }
+}
+
+// Undo 스택에 레코드 추가
+void NemoEdit::AddUndoRecord(const UndoRecord& record) {
+    m_undoStack.push_back(record);
+    m_redoStack.clear();
+
+    // 스택 크기 제한 (메모리 사용량 관리)
+    const size_t MAX_UNDO_SIZE = 1000;
+    if (m_undoStack.size() > MAX_UNDO_SIZE) {
+        m_undoStack.erase(m_undoStack.begin());
+    }
+}
+
+// Insert 레코드 생성
+NemoEdit::UndoRecord NemoEdit::CreateInsertRecord(const TextPos& pos, const std::wstring& text) {
+    UndoRecord record;
+    record.type = UndoRecord::Insert;
+    record.start = pos;             // 삽입할 위치 (작업 전)
+    record.text = text;             // 삽입할 내용
+    SaveCurrentState(record);
+    return record;
+}
+
+// Delete 레코드 생성
+NemoEdit::UndoRecord NemoEdit::CreateDeleteRecord(const TextPos& start, const TextPos& end, const std::wstring& text) {
+    UndoRecord record;
+    record.type = UndoRecord::Delete;
+    record.start = start;           // 삭제 시작 위치 (작업 전)
+    record.end = end;               // 삭제 끝 위치 (작업 전)
+    record.text = text;             // 삭제될 내용
+    SaveCurrentState(record);
+    return record;
+}
+
+// Replace 레코드 생성
+NemoEdit::UndoRecord NemoEdit::CreateReplaceRecord(const TextPos& start, const TextPos& end, const std::wstring& originalText) {
+    UndoRecord record;
+    record.type = UndoRecord::Replace;
+    record.start = start;           // 교체 시작 위치 (작업 전)
+    record.end = end;               // 교체 끝 위치 (작업 전)
+    record.text = originalText;     // 원본 내용
+    SaveCurrentState(record);
+    return record;
+}
+
+// 지정된 범위의 텍스트 삭제 (Undo/Redo용)
+void NemoEdit::DeleteSelectionRange(const TextPos& start, const TextPos& end) {
+    if (start.lineIndex == end.lineIndex) {
+        // 한 라인 내 삭제
+        std::wstring text = m_rope.getLine(start.lineIndex);
+        text.erase(start.column, end.column - start.column);
+        m_rope.update(start.lineIndex, text);
+    }
+    else {
+        // 여러 라인 삭제
+        m_rope.eraseAt(start.lineIndex, start.column,
+            m_rope.getLineSize(start.lineIndex) - start.column);
+        m_rope.eraseAt(end.lineIndex, 0, end.column);
+        if (end.lineIndex - start.lineIndex > 1) {
+            m_rope.eraseRange(start.lineIndex + 1, end.lineIndex - start.lineIndex - 1);
+        }
+        m_rope.mergeLine(start.lineIndex);
+    }
+}
+
+// 지정된 위치에 텍스트 삽입 (Undo/Redo용)
+void NemoEdit::InsertTextAt(const TextPos& pos, const std::wstring& text) {
+    std::vector<std::wstring> parts;
+    SplitTextByNewlines(text, parts);
+
+    if (parts.size() == 1) {
+        // 단일 텍스트 삽입
+        m_rope.insertAt(pos.lineIndex, pos.column, parts[0]);
+    }
+    else {
+        // 여러 라인 텍스트 삽입
+        std::wstring currentLine = m_rope.getLine(pos.lineIndex);
+        std::wstring headText = currentLine.substr(0, pos.column);
+        std::wstring tailText = currentLine.substr(pos.column);
+
+        m_rope.update(pos.lineIndex, headText + parts[0]);
+        for (size_t i = 1; i < parts.size() - 1; i++) {
+            m_rope.insert(pos.lineIndex + i, parts[i]);
+        }
+        if (parts.size() > 1) {
+            m_rope.insert(pos.lineIndex + parts.size() - 1, parts.back() + tailText);
+        }
+    }
+}
+
 // 선택된 텍스트 클립보드로 복사
 void NemoEdit::Copy() {
     if (!m_selectInfo.isSelected) return;
@@ -768,11 +889,9 @@ void NemoEdit::Paste() {
 
     // 캐리지리턴(\r) 제거하여 '\n'만 남김
     clipText.erase(std::remove(clipText.begin(), clipText.end(), L'\r'), clipText.end());
-    if (clipText.empty()) {
-        return;
-    }
+    if (clipText.empty()) return;
 
-    // 붙여넣기 전 선택 영역이 있으면 삭제 (덮어쓰기)
+    // 선택 영역이 있으면 먼저 삭제
     if (m_selectInfo.isSelected) {
         DeleteSelection();
     }
@@ -782,14 +901,11 @@ void NemoEdit::Paste() {
     // 삽입 위치 유효성 검사
     if (insertPos.lineIndex < 0)
         insertPos.lineIndex = 0;
-    if( insertPos.lineIndex >= (int)m_rope.getSize()) 
+    if (insertPos.lineIndex >= (int)m_rope.getSize())
         insertPos.lineIndex = (int)m_rope.getSize();
 
-    // Undo 레코드 준비 - 모든 텍스트에 대해 하나의 레코드만 생성
-    UndoRecord rec;
-    rec.type = UndoRecord::Insert;
-    rec.start = insertPos;
-    rec.text = clipText;  // 원본 텍스트 그대로 저장 (줄바꿈 포함)
+    // Undo 레코드 생성 (작업 전 상태)
+    UndoRecord record = CreateInsertRecord(insertPos, clipText);
 
     // 텍스트를 줄바꿈으로 분리
     std::list<std::wstring> lines;
@@ -805,27 +921,24 @@ void NemoEdit::Paste() {
         lines.push_back(L"");
     }
 
-    // 현재 라인의 캐럿 이후 부분 저장
-    std::wstring tail;
-	std::wstring startLine = m_rope.getLine(insertPos.lineIndex);
-    if (insertPos.column < (int)startLine.size()) {
-        tail = startLine.substr(insertPos.column);
-        startLine.erase(insertPos.column);
-    }
-    
-    lines.front() = startLine + lines.front(); // 첫 번째 라인 처리
-    lines.back() += tail; // 마지막 라인에 tail 추가
-    // 첫번째 라인 처리
+    // 현재 라인 분할 및 텍스트 삽입
+    std::wstring startLine = m_rope.getLine(insertPos.lineIndex);
+    std::wstring tail = startLine.substr(insertPos.column);
+    startLine.erase(insertPos.column);
+
+    lines.front() = startLine + lines.front();
+    lines.back() += tail;
+
+    // 첫 번째 라인 업데이트
     m_rope.update(insertPos.lineIndex, lines.front());
 
     size_t lineSize = lines.size();
-    size_t endColum = lines.back().length() - tail.length();
+    size_t endColumn = lines.back().length() - tail.length();
 
-    bool isMultiline = false;
-    if (lines.size() > SPLIT_THRESHOLD) {
-		isMultiline = true;
+    // 나머지 라인들 삽입
+    bool isMultiline = (lines.size() > SPLIT_THRESHOLD);
+    if (isMultiline) {
         lines.pop_front();
-        // 나머지 라인들은 insertMultiple로 한 번에 삽입
         if (!lines.empty()) {
             m_rope.insertMultiple(insertPos.lineIndex + 1, lines);
         }
@@ -841,20 +954,19 @@ void NemoEdit::Paste() {
     }
 
     // 캐럿 위치 갱신
-	if (lines.size() > 1) { // 여러 라인 삽입
-		if (isMultiline) m_caretPos.lineIndex = insertPos.lineIndex + (int)lineSize; // pop_front 했으므로 +1
-		else m_caretPos.lineIndex = insertPos.lineIndex + (int)lineSize - 1;
+    if (lines.size() > 1) { // 여러 라인 삽입
+        if (isMultiline) m_caretPos.lineIndex = insertPos.lineIndex + (int)lineSize; // pop_front 했으므로 +1
+        else m_caretPos.lineIndex = insertPos.lineIndex + (int)lineSize - 1;
     }
-	else { // 단일 라인 삽입
+    else { // 단일 라인 삽입
         m_caretPos.lineIndex = insertPos.lineIndex;
     }
-    m_caretPos.column = (int)endColum;
+    m_caretPos.column = (int)endColumn;
 
-    // Undo/Redo 스택 갱신 - 하나의 작업으로 기록
-    m_undoStack.push_back(rec);
-    m_redoStack.clear();
+    // Undo 스택에 추가
+    AddUndoRecord(record);
 
-    // 화면 갱신 및 커서 위치 보정
+    // 화면 갱신
     EnsureCaretVisible();
     RecalcScrollSizes();
     Invalidate(FALSE);
@@ -862,184 +974,107 @@ void NemoEdit::Paste() {
 
 // Undo 실행
 void NemoEdit::Undo() {
-    // Undo 스택이 비어있으면 종료
     if (m_undoStack.empty() || m_isReadOnly) return;
 
     // 마지막 작업 기록 가져오기
-    UndoRecord rec = m_undoStack.back();
+    UndoRecord record = m_undoStack.back();
     m_undoStack.pop_back();
 
-    // 캐럿 위치를 작업 시작 지점으로 설정
-    m_caretPos = rec.start;
+    // Redo를 위한 현재 상태 저장
+    UndoRecord redoRecord;
+    redoRecord.type = record.type;
+    SaveCurrentState(redoRecord);
 
-    // 작업 유형에 따른 처리
-    if (rec.type == UndoRecord::Insert) {
-        // 삽입 취소 (삭제 작업 수행)
+    // 작업 타입별 처리
+    switch (record.type) {
+    case UndoRecord::Insert: {
+        // Insert 취소: 삽입된 텍스트 제거
         std::vector<std::wstring> parts;
-        SplitTextByNewlines(rec.text, parts);
+        SplitTextByNewlines(record.text, parts);
 
-        // 단일 라인 삽입 취소
         if (parts.size() == 1) {
-            // 단일 텍스트 삭제
-            m_rope.eraseAt(rec.start.lineIndex, rec.start.column, parts[0].length());
+            // 단일 라인 삽입 취소
+            m_rope.eraseAt(record.start.lineIndex, record.start.column, parts[0].length());
+            redoRecord.start = record.start;
+            redoRecord.text = record.text;
         }
-        // 여러 라인 삽입 취소
-        else if (parts.size() > 1) {
-            // 첫 번째 라인의 원래 텍스트 저장
-            std::wstring originalLine = m_rope.getLine(rec.start.lineIndex).substr(0, rec.start.column);
-
-            // 마지막 라인의 꼬리 부분 저장
-            int lastLineIdx = rec.start.lineIndex + (int)parts.size() - 1;
+        else {
+            // 여러 라인 삽입 취소
+            std::wstring originalLine = m_rope.getLine(record.start.lineIndex).substr(0, record.start.column);
+            int lastLineIdx = record.start.lineIndex + (int)parts.size() - 1;
             std::wstring lastLineTail;
+
             if (lastLineIdx < static_cast<int>(m_rope.getSize())) {
                 std::wstring lastLine = m_rope.getLine(lastLineIdx);
-                if (parts.size() > 1 && parts.back().length() < lastLine.length()) {
+                if (parts.back().length() < lastLine.length()) {
                     lastLineTail = lastLine.substr(parts.back().length());
                 }
             }
 
-            // 첫 번째 라인 수정 (텍스트 삭제 후 꼬리 추가)
-            m_rope.update(rec.start.lineIndex, originalLine + lastLineTail);
-
-            // 추가된 라인들 삭제 (역순으로 삭제)
-            for (int i = lastLineIdx; i > rec.start.lineIndex; i--) {
+            m_rope.update(record.start.lineIndex, originalLine + lastLineTail);
+            for (int i = lastLineIdx; i > record.start.lineIndex; i--) {
                 m_rope.erase(i);
             }
+
+            redoRecord.start = record.start;
+            redoRecord.text = record.text;
         }
+        break;
     }
-    else if (rec.type == UndoRecord::Delete) {
-        // 삭제 취소 (다시 삽입)
+
+    case UndoRecord::Delete: {
+        // Delete 취소: 삭제된 텍스트 복원
+        redoRecord.start = record.start;
+        redoRecord.end = record.end;
+        redoRecord.text = record.text;
+
         std::vector<std::wstring> parts;
-        SplitTextByNewlines(rec.text, parts);
+        SplitTextByNewlines(record.text, parts);
 
-        // 단일 라인 텍스트 복원
         if (parts.size() == 1) {
-            m_rope.insertAt(rec.start.lineIndex, rec.start.column, parts[0]);
-            // 캐럿 위치 조정
-            m_caretPos.column = rec.start.column + (int)parts[0].length();
+            // 단일 텍스트 복원
+            m_rope.insertAt(record.start.lineIndex, record.start.column, parts[0]);
         }
-        // 여러 라인 텍스트 복원
-        else if (parts.size() > 1) {
-            // 현재 라인의 텍스트 가져오기
-            std::wstring currentLine = m_rope.getLine(rec.start.lineIndex);
+        else {
+            // 여러 라인 텍스트 복원
+            std::wstring currentLine = m_rope.getLine(record.start.lineIndex);
+            std::wstring headText = currentLine.substr(0, record.start.column);
+            std::wstring tailText = currentLine.substr(record.start.column);
 
-            // 현재 라인을 분할: 앞부분과 뒷부분
-            std::wstring headText = currentLine.substr(0, rec.start.column);
-            std::wstring tailText = currentLine.substr(rec.start.column);
-
-            // 첫 번째 라인 업데이트 (앞부분 + 복원할 첫 줄)
-            m_rope.update(rec.start.lineIndex, headText + parts[0]);
-
-            // 중간 라인들 삽입
+            m_rope.update(record.start.lineIndex, headText + parts[0]);
             for (size_t i = 1; i < parts.size() - 1; i++) {
-                m_rope.insert(rec.start.lineIndex + i, parts[i]);
+                m_rope.insert(record.start.lineIndex + i, parts[i]);
             }
-
-            // 마지막 라인 삽입 (마지막 복원 줄 + 뒷부분)
             if (parts.size() > 1) {
-                m_rope.insert(rec.start.lineIndex + parts.size() - 1, parts.back() + tailText);
+                m_rope.insert(record.start.lineIndex + parts.size() - 1, parts.back() + tailText);
             }
-
-            // 캐럿 위치 조정
-            m_caretPos.lineIndex = rec.start.lineIndex + (int)parts.size() - 1;
-            m_caretPos.column = (int)parts.back().length();
         }
+        break;
     }
-    else if (rec.type == UndoRecord::Replace) {
-        // Replace 취소 (지정된 범위를 원본 텍스트로 교체)
 
-        // 현재 텍스트 저장 (Redo에서 사용)
+    case UndoRecord::Replace: {
+        // 현재 B 텍스트를 정확한 범위로 가져오기
         std::wstring currentText = m_rope.getTextRange(
-            rec.start.lineIndex, 0,
-            rec.end.lineIndex, m_rope.getLineSize(rec.end.lineIndex)
-        );
-
-        // 먼저 처리할 라인 범위 확인
-        int startLine = rec.start.lineIndex;
-        int endLine = rec.end.lineIndex;
-
-        // 원본 텍스트를 라인별로 분할하여 처리
-        std::list<std::wstring> originalLines;
-        size_t pos = 0;
-        size_t nlPos;
-
-        // 개행 기준으로 원본 텍스트 분할
-        while (pos < rec.text.size()) {
-            nlPos = rec.text.find(L'\n', pos);
-
-            if (nlPos == std::wstring::npos) {
-                // 마지막 라인
-                originalLines.push_back(rec.text.substr(pos));
-                break;
-            }
-            else {
-                // 중간 라인 (CR 제거)
-                std::wstring line = rec.text.substr(pos, nlPos - pos);
-                if (!line.empty() && line.back() == L'\r') {
-                    line.pop_back();
-                }
-                originalLines.push_back(line);
-                pos = nlPos + 1;
-            }
-        }
-
-        // 빈 텍스트인 경우 빈 라인 추가
-        if (originalLines.empty()) {
-            originalLines.push_back(L"");
-        }
-
-        // 복원해야 할 라인 수 확인
-        int originalLineCount = static_cast<int>(originalLines.size());
-        int currentLineCount = endLine - startLine + 1;
-
-        // 기존 문서에 라인이 부족한 경우 빈 라인으로 채움
-        while (m_rope.getSize() <= endLine) {
-            m_rope.update(m_rope.getSize(), L"");
-        }
-
-        // 1. 원본 텍스트의 라인 수만큼 update 수행
-        auto lineIter = originalLines.begin();
-        for (int i = 0; i < originalLineCount && lineIter != originalLines.end(); i++) {
-            int lineIdx = startLine + i;
-
-            // 문서 범위 내에 있는지 확인
-            if (lineIdx < m_rope.getSize()) {
-                m_rope.update(lineIdx, *lineIter);
-            }
-
-            ++lineIter;
-        }
-
-        // 선택 영역 복원 - 저장된 선택 영역 정보 사용
-        if (rec.startSelect.lineIndex >= 0 && rec.endSelect.lineIndex >= 0) {
-            m_selectInfo.start = rec.startSelect;
-            m_selectInfo.end = rec.endSelect;
-            m_selectInfo.anchor = rec.startSelect;
-            m_selectInfo.isSelected = true;
-            m_selectInfo.isSelecting = false;
-        }
-
-        // 캐럿 위치 조정
-        m_caretPos = m_selectInfo.end;
+            record.start.lineIndex, record.start.column,
+            record.end.lineIndex, record.end.column);  // 이제 B의 정확한 범위!
 
         // Redo 레코드 생성
-        UndoRecord redoRec = rec;
-        redoRec.text = currentText;
-        redoRec.startSelect = m_selectInfo.start;
-        redoRec.endSelect = m_selectInfo.end;
+        redoRecord.start = record.start;
+        redoRecord.end = record.end;  // B의 범위
+        redoRecord.text = currentText;  // B 텍스트
 
-        // Redo 스택에 추가
-        m_redoStack.push_back(redoRec);
-
-        // 화면 갱신 후 반환
-        EnsureCaretVisible();
-        RecalcScrollSizes();
-        Invalidate(FALSE);
-        return;
+        // B 삭제 후 A 복원
+        DeleteSelectionRange(record.start, record.end);  // B 삭제
+        InsertTextAt(record.start, record.text);          // A 복원
+        break;
+    }
     }
 
-    // Redo 스택에 추가 (Replace 타입 제외, 이미 처리됨)
-    m_redoStack.push_back(rec);
+    // 상태 복원
+    RestoreState(record);
+
+    // Redo 스택에 추가
+    m_redoStack.push_back(redoRecord);
 
     // 화면 갱신
     EnsureCaretVisible();
@@ -1049,151 +1084,57 @@ void NemoEdit::Undo() {
 
 // Redo 실행
 void NemoEdit::Redo() {
-    // Redo 스택이 비어있으면 종료
     if (m_redoStack.empty() || m_isReadOnly) return;
 
-    // 마지막 작업 기록 가져오기
-    UndoRecord rec = m_redoStack.back();
+    // 마지막 Redo 기록 가져오기
+    UndoRecord record = m_redoStack.back();
     m_redoStack.pop_back();
 
-    // 캐럿 위치를 작업 시작 지점으로 설정
-    m_caretPos = rec.start;
+    // Undo를 위한 현재 상태 저장
+    UndoRecord undoRecord;
+    undoRecord.type = record.type;
+    SaveCurrentState(undoRecord);
 
-    // 작업 유형에 따른 처리 (Undo의 반대 작업 수행)
-    if (rec.type == UndoRecord::Insert) {
-        // 삽입 다시 실행
-        std::vector<std::wstring> parts;
-        SplitTextByNewlines(rec.text, parts);
-
-        // 단일 라인 삽입
-        if (parts.size() == 1) {
-            m_rope.insertAt(rec.start.lineIndex, rec.start.column, parts[0]);
-            // 캐럿 위치 조정
-            m_caretPos.column = rec.start.column + (int)parts[0].length();
-        }
-        // 여러 라인 삽입
-        else if (parts.size() > 1) {
-            // 현재 라인의 텍스트 가져오기
-            std::wstring currentLine = m_rope.getLine(rec.start.lineIndex);
-
-            // 현재 라인을 분할: 앞부분과 뒷부분
-            std::wstring headText = currentLine.substr(0, rec.start.column);
-            std::wstring tailText = currentLine.substr(rec.start.column);
-
-            // 첫 번째 라인 업데이트 (앞부분 + 첫 줄)
-            m_rope.update(rec.start.lineIndex, headText + parts[0]);
-
-            // 중간 라인들 삽입
-            for (size_t i = 1; i < parts.size() - 1; i++) {
-                m_rope.insert(rec.start.lineIndex + i, parts[i]);
-            }
-
-            // 마지막 라인 삽입 (마지막 줄 + 뒷부분)
-            if (parts.size() > 1) {
-                m_rope.insert(rec.start.lineIndex + parts.size() - 1, parts.back() + tailText);
-            }
-
-            // 캐럿 위치 조정
-            m_caretPos.lineIndex = rec.start.lineIndex + (int)parts.size() - 1;
-            m_caretPos.column = (int)parts.back().length();
-        }
+    // 작업 타입별 처리 (Undo와 반대)
+    switch (record.type) {
+    case UndoRecord::Insert: {
+        // Insert 재실행
+        InsertTextAt(record.start, record.text);
+        undoRecord.start = record.start;
+        undoRecord.text = record.text;
+        break;
     }
-    else if (rec.type == UndoRecord::Delete) {
-        // 삭제 다시 실행
-        std::vector<std::wstring> parts;
-        SplitTextByNewlines(rec.text, parts);
 
-        // 단일 라인 삭제
-        if (parts.size() == 1) {
-            m_rope.eraseAt(rec.start.lineIndex, rec.start.column, parts[0].length());
-        }
-        // 여러 라인 삭제
-        else if (parts.size() > 1) {
-            // 첫 번째 라인의 원래 텍스트 저장
-            std::wstring originalLine = m_rope.getLine(rec.start.lineIndex).substr(0, rec.start.column);
-
-            // 마지막 라인의 꼬리 부분 저장
-            int lastLineIdx = rec.start.lineIndex + (int)parts.size() - 1;
-            std::wstring lastLineTail;
-            if (lastLineIdx < static_cast<int>(m_rope.getSize())) {
-                std::wstring lastLine = m_rope.getLine(lastLineIdx);
-                if (parts.size() > 1 && parts.back().length() < lastLine.length()) {
-                    lastLineTail = lastLine.substr(parts.back().length());
-                }
-            }
-
-            // 첫 번째 라인 수정 (텍스트 삭제 후 꼬리 추가)
-            m_rope.update(rec.start.lineIndex, originalLine + lastLineTail);
-
-            // 추가된 라인들 삭제 (역순으로 삭제)
-            for (int i = lastLineIdx; i > rec.start.lineIndex; i--) {
-                m_rope.erase(i);
-            }
-        }
+    case UndoRecord::Delete: {
+        // Delete 재실행
+        undoRecord.start = record.start;
+        undoRecord.end = record.end;
+        undoRecord.text = record.text;
+        DeleteSelectionRange(record.start, record.end);
+        break;
     }
-    else if (rec.type == UndoRecord::Replace) {
-        // Replace 다시 실행 (지정된 범위를 새 텍스트로 교체)
 
-        // 현재 텍스트 저장 (Undo에서 사용)
-        std::wstring currentText = m_rope.getTextRange(
-            rec.start.lineIndex, 0,
-            rec.end.lineIndex, m_rope.getLineSize(rec.end.lineIndex)
-        );
+    case UndoRecord::Replace: {
+        // Replace 재실행
+        std::wstring originalText = m_rope.getTextRange(
+            record.start.lineIndex, record.start.column,
+            record.end.lineIndex, record.end.column);
 
-        // 먼저 처리할 라인 범위 확인
-        int startLine = rec.start.lineIndex;
-        int endLine = rec.end.lineIndex;
+        undoRecord.start = record.start;
+        undoRecord.end = record.end;
+        undoRecord.text = originalText;
 
-        // 선택 영역의 텍스트를 새 텍스트로 교체
-        std::vector<std::wstring> parts;
-        SplitTextByNewlines(rec.text, parts);
+        DeleteSelectionRange(record.start, record.end);
+        InsertTextAt(record.start, record.text);
+        break;
+    }
+    }
 
-        // 첫 번째 라인 업데이트
-        m_rope.update(startLine, parts[0]);
-
-        // 중간 라인 처리: 기존 라인 삭제 후 새 라인 삽입
-        // 1. 첫 번째 라인 이후부터 마지막 라인까지 모두 삭제
-        for (int i = endLine; i > startLine; i--) {
-            m_rope.erase(i);
-        }
-
-        // 2. 새 라인 삽입
-        for (size_t i = 1; i < parts.size(); i++) {
-            m_rope.insert(startLine + i, parts[i]);
-        }
-
-        // 선택 영역 복원 - 저장된 selectStart와 selectEnd 사용
-        if (rec.startSelect.lineIndex >= 0 && rec.endSelect.lineIndex >= 0) {
-            m_selectInfo.start = rec.startSelect;
-            m_selectInfo.end = rec.endSelect;
-            m_selectInfo.anchor = rec.startSelect;
-            m_selectInfo.isSelected = true;
-            m_selectInfo.isSelecting = false;
-        }
-
-        // 캐럿 위치 조정
-        m_caretPos = m_selectInfo.end;
-
-        // Undo 레코드 생성 (원래 텍스트와 위치 정보 포함)
-        UndoRecord undoRec = rec;
-        undoRec.text = currentText;
-
-        // 선택 영역 정보 유지
-        undoRec.startSelect = m_selectInfo.start;
-        undoRec.endSelect = m_selectInfo.end;
+    // 상태 복원
+    RestoreState(record);
 
     // Undo 스택에 추가
-        m_undoStack.push_back(undoRec);
-
-        // 화면 갱신 후 반환
-        EnsureCaretVisible();
-        RecalcScrollSizes();
-        Invalidate(FALSE);
-        return;
-    }
-
-    // Undo 스택에 추가 (Replace 타입 제외, 이미 처리됨)
-    m_undoStack.push_back(rec);
+    m_undoStack.push_back(undoRecord);
 
     // 화면 갱신
     EnsureCaretVisible();
@@ -1438,53 +1379,41 @@ void NemoEdit::AddTabToSelectedLines() {
         end = m_selectInfo.start;
     }
 
-    // 한 줄만 선택된 경우 일반 탭 처리로 돌아감
+    // 한 줄만 선택된 경우 일반 탭 처리
     if (start.lineIndex == end.lineIndex) return;
 
-    // 각 라인에 적용할 문자 준비 (탭 문자)
-    std::wstring tabStr(1, L'\t');
-
-    // 변경 전 선택된 라인들의 상태 저장
+    // 변경될 전체 영역의 원본 텍스트 저장 (작업 전 상태)
+    TextPos recordStart(start.lineIndex, 0);
+    TextPos recordEnd(end.lineIndex, m_rope.getLineSize(end.lineIndex));
     std::wstring originalText = m_rope.getTextRange(
-        start.lineIndex, 0,  // 첫 번째 선택 라인의 시작
-        end.lineIndex, m_rope.getLineSize(end.lineIndex)  // 마지막 선택 라인의 끝
-    );
+        recordStart.lineIndex, recordStart.column,
+        recordEnd.lineIndex, recordEnd.column);
 
-    // Replace 타입의 Undo 레코드 생성
-    UndoRecord rec;
-    rec.type = UndoRecord::Replace;  // Replace 타입: Undo 시 원본 텍스트로 전체 교체
-    rec.start = TextPos(start.lineIndex, 0);  // 첫 번째 선택 라인의 시작
-    rec.end = TextPos(end.lineIndex, m_rope.getLineSize(end.lineIndex));  // 마지막 선택 라인의 끝
-    rec.text = originalText;  // 변경 전 원본 텍스트
-    rec.startSelect = start;  // 원래 선택 영역 시작 (탭 추가 전)
-    rec.endSelect = end;     // 원래 선택 영역 끝 (탭 추가 전)
+    // Undo 레코드 생성
+    UndoRecord record = CreateReplaceRecord(recordStart, recordEnd, originalText);
 
     // 각 라인에 탭 추가
+    std::wstring tabStr(1, L'\t');
     for (int lineIdx = start.lineIndex; lineIdx <= end.lineIndex; lineIdx++) {
         std::wstring line = m_rope.getLine(lineIdx);
         line.insert(0, tabStr);
         m_rope.update(lineIdx, line);
     }
 
-    // 캐럿 및 선택 영역 위치 조정
+    // 선택 영역 위치 조정 (탭 추가로 인한 변화)
     TextPos newStart = start;
     TextPos newEnd = end;
-
-    // 탭이 추가되었으므로 선택 영역 열 위치 조정
     newStart.column += 1;
     newEnd.column += 1;
 
-    // 선택 영역 업데이트
+    // 선택 영역 및 캐럿 위치 업데이트
     m_selectInfo.start = newStart;
     m_selectInfo.end = newEnd;
     m_selectInfo.anchor = newStart;
-
-    // 캐럿 위치 업데이트
     m_caretPos = newEnd;
 
     // Undo 스택에 추가
-    m_undoStack.push_back(rec);
-    m_redoStack.clear();
+    AddUndoRecord(record);
 
     // 화면 갱신
     EnsureCaretVisible();
@@ -1504,38 +1433,34 @@ void NemoEdit::RemoveTabFromSelectedLines() {
         end = m_selectInfo.start;
     }
 
-    // 한 줄만 선택된 경우 일반 처리로 돌아감
+    // 한 줄만 선택된 경우 일반 처리
     if (start.lineIndex == end.lineIndex) return;
 
-    // 변경 전 선택된 라인들의 상태 저장
+    // 변경될 전체 영역의 원본 텍스트 저장 (작업 전 상태)
+    TextPos recordStart(start.lineIndex, 0);
+    TextPos recordEnd(end.lineIndex, m_rope.getLineSize(end.lineIndex));
     std::wstring originalText = m_rope.getTextRange(
-        start.lineIndex, 0,  // 첫 번째 선택 라인의 시작
-        end.lineIndex, m_rope.getLineSize(end.lineIndex)  // 마지막 선택 라인의 끝
-    );
+        recordStart.lineIndex, recordStart.column,
+        recordEnd.lineIndex, recordEnd.column);
 
-    // 각 라인에서 탭 제거
+    // 변경 사항이 있는지 미리 확인
     bool anyChanged = false;
+    std::vector<int> removedCounts(end.lineIndex - start.lineIndex + 1, 0);
+
     for (int lineIdx = start.lineIndex; lineIdx <= end.lineIndex; lineIdx++) {
         std::wstring line = m_rope.getLine(lineIdx);
-
-        // 라인이 탭이나 공백으로 시작하는지 확인
         if (!line.empty()) {
             if (line[0] == L'\t') {
-                // 첫 문자가 탭이면 제거
-                line.erase(0, 1);
-                m_rope.update(lineIdx, line);
+                removedCounts[lineIdx - start.lineIndex] = 1;
                 anyChanged = true;
             }
             else if (line[0] == L' ') {
-                // 첫 문자가 공백이면 최대 탭 크기만큼의 공백 제거
                 int spacesToRemove = 0;
                 for (int i = 0; i < m_tabSize && i < line.length() && line[i] == L' '; i++) {
                     spacesToRemove++;
                 }
-
                 if (spacesToRemove > 0) {
-                    line.erase(0, spacesToRemove);
-                    m_rope.update(lineIdx, line);
+                    removedCounts[lineIdx - start.lineIndex] = spacesToRemove;
                     anyChanged = true;
                 }
             }
@@ -1545,42 +1470,37 @@ void NemoEdit::RemoveTabFromSelectedLines() {
     // 변경된 사항이 없으면 종료
     if (!anyChanged) return;
 
-    // 변경 후 선택 영역 위치 조정
+    // Undo 레코드 생성
+    UndoRecord record = CreateReplaceRecord(recordStart, recordEnd, originalText);
+
+    // 각 라인에서 들여쓰기 제거
+    for (int lineIdx = start.lineIndex; lineIdx <= end.lineIndex; lineIdx++) {
+        int removeCount = removedCounts[lineIdx - start.lineIndex];
+        if (removeCount > 0) {
+            std::wstring line = m_rope.getLine(lineIdx);
+            line.erase(0, removeCount);
+            m_rope.update(lineIdx, line);
+        }
+    }
+
+    // 선택 영역 위치 조정
     TextPos newStart = start;
     TextPos newEnd = end;
-
-    // 시작 라인에서 들여쓰기가 제거되었으면 열 위치 조정
     if (newStart.column > 0) {
-        newStart.column = max(0, newStart.column - 1);
+        newStart.column = max(0, newStart.column - removedCounts[0]);
     }
-
-    // 끝 라인에서 들여쓰기가 제거되었으면 열 위치 조정
     if (newEnd.column > 0) {
-        newEnd.column = max(0, newEnd.column - 1);
+        newEnd.column = max(0, newEnd.column - removedCounts[end.lineIndex - start.lineIndex]);
     }
 
-    // 선택 영역 업데이트
+    // 선택 영역 및 캐럿 위치 업데이트
     m_selectInfo.start = newStart;
     m_selectInfo.end = newEnd;
     m_selectInfo.anchor = newStart;
-
-    // 캐럿 위치 업데이트
     m_caretPos = newEnd;
 
-    // Replace 타입의 Undo 레코드 생성
-    UndoRecord rec;
-    rec.type = UndoRecord::Replace;  // Replace 타입: Undo 시 원본 텍스트로 전체 교체
-    rec.start = TextPos(start.lineIndex, 0);  // 첫 번째 선택 라인의 시작
-    rec.end = TextPos(end.lineIndex, m_rope.getLineSize(end.lineIndex));  // 마지막 선택 라인의 끝
-    rec.text = originalText;  // 변경 전 원본 텍스트
-
-    // 선택 영역 정보 정확히 저장
-    rec.startSelect = start;  // 원래 선택 영역 시작 (탭 제거 전)
-    rec.endSelect = end;     // 원래 선택 영역 끝 (탭 제거 전)
-
     // Undo 스택에 추가
-    m_undoStack.push_back(rec);
-    m_redoStack.clear();
+    AddUndoRecord(record);
 
     // 화면 갱신
     EnsureCaretVisible();
@@ -1589,119 +1509,137 @@ void NemoEdit::RemoveTabFromSelectedLines() {
 
 // 새로운 문자를 현 위치에 삽입
 void NemoEdit::InsertChar(wchar_t ch) {
-	std::wstring addStr(1, ch);
-	m_rope.insertAt(m_caretPos.lineIndex, m_caretPos.column, addStr);
- 
-    // Undo 레코드 추가
-    UndoRecord rec;
-    rec.type = UndoRecord::Insert;
-    rec.start = m_caretPos;
-    rec.text = addStr;
-    m_undoStack.push_back(rec);
-    m_redoStack.clear();
+    if (m_isReadOnly) return;
+    
+    std::wstring addStr(1, ch);
+    
+    // 선택영역이 있으면 Replace로 가기때문에 여기 오지 않음.
+    
+    // Undo 레코드 생성 (작업 전 상태)
+    UndoRecord record = CreateInsertRecord(m_caretPos, addStr);
+    
+    // 실제 삽입 작업
+    m_rope.insertAt(m_caretPos.lineIndex, m_caretPos.column, addStr);
+    
     // 캐럿 이동
     m_caretPos.column++;
+    
+    // Undo 스택에 추가
+    AddUndoRecord(record);
 }
 
 // 새 줄 삽입 (현재 위치에서 줄 분리)
 void NemoEdit::InsertNewLine() {
-    int oldLineIdx = m_caretPos.lineIndex;
-    int oldCol = m_caretPos.column;
+    if (m_isReadOnly) return;
 
-	std::wstring text = m_rope.getLine(oldLineIdx);
-    std::wstring tail = text.substr(oldCol); // 뒤의 문자열 저장
-	std::wstring chgText = text.substr(0, oldCol); // 캐럿 이전 문자열 저장
-	m_rope.update(oldLineIdx, chgText); // 현재 라인에서 캐럿 이전 문자열 저장
-	m_rope.insert(oldLineIdx + 1, tail); // 현재 라인 뒤에 tail을 담은 새 라인 추가
+    // 선택 영역이 있으면 먼저 삭제
+    //if (m_selectInfo.isSelected) {
+    //    DeleteSelection();
+    //}
 
-    // 캐럿 위치 새로운 라인으로
-    m_caretPos.lineIndex = oldLineIdx + 1;
+    // Undo 레코드 생성 (작업 전 상태)
+    UndoRecord record = CreateInsertRecord(m_caretPos, L"\n");
+
+    std::wstring text = m_rope.getLine(m_caretPos.lineIndex);
+    std::wstring tail = text.substr(m_caretPos.column);
+    std::wstring chgText = text.substr(0, m_caretPos.column);
+
+    m_rope.update(m_caretPos.lineIndex, chgText);
+    m_rope.insert(m_caretPos.lineIndex + 1, tail);
+
+    // 캐럿 위치 업데이트
+    m_caretPos.lineIndex += 1;
     m_caretPos.column = 0;
     m_scrollX = 0;
 
-    // Undo 레코드 추가 (개행 삽입)
-    UndoRecord rec;
-    rec.type = UndoRecord::Insert;
-    rec.start = TextPos(oldLineIdx, oldCol);
-    rec.text = L"\n";
-    m_undoStack.push_back(rec);
-    m_redoStack.clear();
+    // Undo 스택에 추가
+    AddUndoRecord(record);
 }
 
 // 문자 삭제 (backspace=true인 경우 Backspace 처리, false이면 Delete 처리)
 void NemoEdit::DeleteChar(bool backspace) {
+    if (m_isReadOnly) return;
+
     // 선택 영역이 있을 경우 해당 영역 삭제
-    if(m_selectInfo.isSelected) {
+    if (m_selectInfo.isSelected) {
         DeleteSelection();
         return;
     }
 
-	// 백스페이스 키 처리
-    if(backspace) {
-        // 이전 라인과 병합
-        if(m_caretPos.column == 0) {
+    UndoRecord record;
+
+    if (backspace) {
+        // 백스페이스 처리
+        if (m_caretPos.column == 0) {
             // 라인 맨 앞에서 백스페이스 -> 이전 라인과 병합
-            if(m_caretPos.lineIndex > 0) {
+            if (m_caretPos.lineIndex > 0) {
                 int prevLength = (int)m_rope.getLineSize(m_caretPos.lineIndex - 1);
-                m_rope.mergeLine(m_caretPos.lineIndex-1);
 
-                // Undo: 개행 문자 제거
-                UndoRecord rec;
-                rec.type = UndoRecord::Delete;
-                rec.start = TextPos(m_caretPos.lineIndex - 1, prevLength);
-                rec.text = L"\n";
+                // Undo 레코드 생성 (작업 전 상태)
+                TextPos deleteStart(m_caretPos.lineIndex - 1, prevLength);
+                TextPos deleteEnd(m_caretPos.lineIndex, 0);
+                record = CreateDeleteRecord(deleteStart, deleteEnd, L"\n");
 
-                // 캐럿을 이전 라인의 끝으로 이동
+                // 실제 병합 작업
+                m_rope.mergeLine(m_caretPos.lineIndex - 1);
+
+                // 캐럿 위치 업데이트
                 m_caretPos.lineIndex--;
                 m_caretPos.column = prevLength;
-                m_undoStack.push_back(rec);
-                m_redoStack.clear();
+            }
+            else {
+                return; // 첫 라인 첫 위치에서는 백스페이스 무시
             }
         }
-        // 단순 삭제
         else {
-            // 같은 라인에서 캐럿 왼쪽 문자 삭제
-			m_rope.eraseAt(m_caretPos.lineIndex, m_caretPos.column-1, 1);
-			std::wstring removeStr = m_rope.getLine(m_caretPos.lineIndex).substr(m_caretPos.column-1, 1);
+            // 일반 문자 삭제
+            std::wstring line = m_rope.getLine(m_caretPos.lineIndex);
+            std::wstring removeStr = line.substr(m_caretPos.column - 1, 1);
+
+            // Undo 레코드 생성 (작업 전 상태)
+            TextPos deleteStart(m_caretPos.lineIndex, m_caretPos.column - 1);
+            TextPos deleteEnd(m_caretPos.lineIndex, m_caretPos.column);
+            record = CreateDeleteRecord(deleteStart, deleteEnd, removeStr);
+
+            // 실제 삭제 작업
+            m_rope.eraseAt(m_caretPos.lineIndex, m_caretPos.column - 1, 1);
             m_caretPos.column--;
-            // Undo: 문자 삭제
-            UndoRecord rec;
-            rec.type = UndoRecord::Delete;
-            rec.start = TextPos(m_caretPos.lineIndex, m_caretPos.column);
-            rec.text = removeStr;
-            m_undoStack.push_back(rec);
-            m_redoStack.clear();
         }
     }
-	// Delete 키 처리
     else {
         // Delete 키 처리
-        if(m_caretPos.column >= (int)m_rope.getLineSize(m_caretPos.lineIndex)) {
+        if (m_caretPos.column >= (int)m_rope.getLineSize(m_caretPos.lineIndex)) {
             // 라인 끝에서 Delete -> 다음 라인과 병합
-            if(m_caretPos.lineIndex < (int)m_rope.getSize() - 1) {
-				m_rope.mergeLine(m_caretPos.lineIndex);
+            if (m_caretPos.lineIndex < (int)m_rope.getSize() - 1) {
+                // Undo 레코드 생성 (작업 전 상태)
+                TextPos deleteStart = m_caretPos;
+                TextPos deleteEnd(m_caretPos.lineIndex + 1, 0);
+                record = CreateDeleteRecord(deleteStart, deleteEnd, L"\n");
 
-                // Undo: 개행 삭제
-                UndoRecord rec;
-                rec.type = UndoRecord::Delete;
-                rec.start = m_caretPos;
-                rec.text = L"\n";
-                m_undoStack.push_back(rec);
-                m_redoStack.clear();
-                // 캐럿 위치는 변동 없음 (병합된 위치가 원래 캐럿 위치)
+                // 실제 병합 작업
+                m_rope.mergeLine(m_caretPos.lineIndex);
             }
-        } else {
-            // 캐럿 위치의 문자 삭제
+            else {
+                return; // 마지막 라인 끝에서는 Delete 무시
+            }
+        }
+        else {
+            // 일반 문자 삭제
+            std::wstring line = m_rope.getLine(m_caretPos.lineIndex);
+            std::wstring removeStr = line.substr(m_caretPos.column, 1);
+
+            // Undo 레코드 생성 (작업 전 상태)
+            TextPos deleteStart = m_caretPos;
+            TextPos deleteEnd(m_caretPos.lineIndex, m_caretPos.column + 1);
+            record = CreateDeleteRecord(deleteStart, deleteEnd, removeStr);
+
+            // 실제 삭제 작업
             m_rope.eraseAt(m_caretPos.lineIndex, m_caretPos.column, 1);
-            std::wstring removeStr = m_rope.getLine(m_caretPos.lineIndex).substr(m_caretPos.column, 1);
-            UndoRecord rec;
-            rec.type = UndoRecord::Delete;
-            rec.start = m_caretPos;
-            rec.text = removeStr;
-            m_undoStack.push_back(rec);
-            m_redoStack.clear();
         }
     }
+
+    // Undo 스택에 추가
+    AddUndoRecord(record);
 }
 
 void NemoEdit::CancelSelection() {
@@ -1713,9 +1651,7 @@ void NemoEdit::CancelSelection() {
 
 // 선택 영역의 텍스트 삭제
 void NemoEdit::DeleteSelection() {
-    // 선택 영역이 없으면 종료
-    if (!m_selectInfo.isSelected || m_isReadOnly)
-        return;
+    if (!m_selectInfo.isSelected || m_isReadOnly) return;
 
     // 선택 영역 정규화
     TextPos start = m_selectInfo.start;
@@ -1726,54 +1662,94 @@ void NemoEdit::DeleteSelection() {
         end = m_selectInfo.start;
     }
 
-    // 삭제될 텍스트 저장 (Undo를 위해)
-    std::wstring removedText;
+    // 삭제될 텍스트 미리 저장 (작업 전 상태)
+    std::wstring removedText = m_rope.getTextRange(
+        start.lineIndex, start.column, end.lineIndex, end.column);
 
-    // 선택 영역이 한 라인 내에 있는 경우
+    // Undo 레코드 생성 (작업 전 상태)
+    UndoRecord record = CreateDeleteRecord(start, end, removedText);
+
+    // 실제 삭제 작업
     if (start.lineIndex == end.lineIndex) {
-		std::wstring text = m_rope.getLine(start.lineIndex);
-        removedText = text.substr(start.column, end.column - start.column);
+        // 한 라인 내 삭제
+        std::wstring text = m_rope.getLine(start.lineIndex);
         text.erase(start.column, end.column - start.column);
-		m_rope.update(start.lineIndex, text);
+        m_rope.update(start.lineIndex, text);
     }
-    // 선택 영역이 여러 라인에 걸쳐 있는 경우
     else {
-		removedText = m_rope.getTextRange(start.lineIndex, start.column, end.lineIndex, end.column);
-		m_rope.eraseAt(start.lineIndex, start.column, m_rope.getLineSize(start.lineIndex) - start.column);
-		m_rope.eraseAt(end.lineIndex, 0, end.column);
-		if (end.lineIndex - start.lineIndex > 1)
-		    m_rope.eraseRange(start.lineIndex+1, end.lineIndex - start.lineIndex-1);
-		m_rope.mergeLine(start.lineIndex);
+        // 여러 라인 삭제
+        m_rope.eraseAt(start.lineIndex, start.column,
+            m_rope.getLineSize(start.lineIndex) - start.column);
+        m_rope.eraseAt(end.lineIndex, 0, end.column);
+        if (end.lineIndex - start.lineIndex > 1) {
+            m_rope.eraseRange(start.lineIndex + 1, end.lineIndex - start.lineIndex - 1);
+        }
+        m_rope.mergeLine(start.lineIndex);
     }
 
-    // 캐럿을 시작 지점으로 이동
+    // 캐럿 위치 및 선택 영역 업데이트
     m_caretPos = start;
-
-    // 선택 영역 해제
-    m_selectInfo.start = m_caretPos;
-    m_selectInfo.end = m_caretPos;
-    m_selectInfo.anchor = m_caretPos;
+    m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
     m_selectInfo.isSelected = false;
     m_selectInfo.isSelecting = false;
 
-    // Undo 레코드 추가
-    UndoRecord rec;
-    rec.type = UndoRecord::Delete;
-    rec.start = start;
-    rec.text = removedText;
-    m_undoStack.push_back(rec);
-    m_redoStack.clear();
+    // Undo 스택에 추가
+    AddUndoRecord(record);
 
-    // 모든 텍스트가 삭제된 경우 빈 라인 추가
+    // 빈 문서 처리
     if (m_rope.empty()) {
         m_rope.insertBack(L"");
         m_caretPos = TextPos(0, 0);
         m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
-        m_selectInfo.isSelected = false;
-        m_selectInfo.isSelecting = false;
+    }
+}
+
+void NemoEdit::ReplaceSelection(std::wstring text) {
+    if (!m_selectInfo.isSelected || m_isReadOnly) return;
+
+    // 선택 영역 정규화
+    TextPos start = m_selectInfo.start;
+    TextPos end = m_selectInfo.end;
+    if (end.lineIndex < start.lineIndex ||
+        (end.lineIndex == start.lineIndex && end.column < start.column)) {
+        start = m_selectInfo.end;
+        end = m_selectInfo.start;
     }
 
-	EnsureCaretVisible();
+    // 원본 A 텍스트 저장
+    std::wstring originalText = m_rope.getTextRange(
+        start.lineIndex, start.column, end.lineIndex, end.column);
+
+    // B의 끝 위치 미리 계산
+    std::vector<std::wstring> parts;
+    SplitTextByNewlines(text, parts);
+
+    TextPos bEndPos;
+    if (parts.size() == 1) {
+        bEndPos = TextPos(start.lineIndex, start.column + text.length());
+    }
+    else {
+        bEndPos = TextPos(start.lineIndex + parts.size() - 1, parts.back().length());
+    }
+
+    // 🎯 핵심: UndoRecord의 end를 B의 끝 위치로 저장
+    UndoRecord record = CreateReplaceRecord(start, bEndPos, originalText);
+
+    // 실제 교체 작업
+    DeleteSelectionRange(start, end);  // A 삭제
+    InsertTextAt(start, text);         // B 삽입
+
+    // 캐럿 위치 설정
+    m_caretPos = bEndPos;
+
+    // 선택 영역 해제
+    m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
+    m_selectInfo.isSelected = false;
+    m_selectInfo.isSelecting = false;
+
+    AddUndoRecord(record);
+
+    EnsureCaretVisible();
     RecalcScrollSizes();
     Invalidate(FALSE);
 }
@@ -3113,9 +3089,10 @@ void NemoEdit::OnChar(UINT nChar, UINT nRepCnt, UINT nFlags) {
     } else if(nChar >= 32) {
         // 일반 문자 입력
         if (m_selectInfo.isSelected) {
-            DeleteSelection();
-        }
-        InsertChar((wchar_t)nChar);
+            //DeleteSelection();
+            std::wstring tmpStr(1, nChar);
+            ReplaceSelection(tmpStr);
+        } else InsertChar((wchar_t)nChar);
     }
     EnsureCaretVisible();
     Invalidate(FALSE); // 배경 그리지 않음

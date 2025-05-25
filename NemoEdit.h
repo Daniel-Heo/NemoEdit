@@ -299,11 +299,19 @@ protected:
 
     struct UndoRecord {
         enum Type { Insert, Delete, Replace } type;
-        TextPos start;
-        TextPos end;
-        TextPos startSelect;
-        TextPos endSelect;
-        std::wstring text;
+
+        // 작업 범위 (모두 작업 전 상태 기준)
+        TextPos start;          // 작업 시작 위치 (작업 전)
+        TextPos end;            // 작업 끝 위치 (작업 전, Delete/Replace용)
+        std::wstring text;      // Insert: 삽입할 내용, Delete/Replace: 원본 내용
+
+        // 선택 영역 복원용 (작업 전 상태)
+        bool hadSelection;      // 작업 전에 선택 영역이 있었는지
+        TextPos selectStart;    // 작업 전 선택 영역 시작
+        TextPos selectEnd;      // 작업 전 선택 영역 끝
+        TextPos caretPos;       // 작업 전 캐럿 위치
+
+        UndoRecord() : type(Insert), hadSelection(false) {}
     };
 
     // 메시지 처리 함수들
@@ -342,14 +350,15 @@ private:
 	void DeleteChar(bool backspace);
     void CancelSelection();
 	void DeleteSelection();
+	void ReplaceSelection(std::wstring text);
     int GetTextWidth(const std::wstring& line); // 문자의 길이를 캐싱된 데이터로 계산
 	std::vector<int> FindWordWrapPosition(int lineIndex); // 자동 줄바꿈 위치 찾기
 	void SplitTextByNewlines(const std::wstring& text, std::vector<std::wstring>& parts); // 텍스트를 줄바꿈 문자로 분리
     void AddTabToSelectedLines();      // 여러 줄 선택 시 탭 추가 처리 메서드
     void RemoveTabFromSelectedLines(); // 여러 줄 선택 시 탭 제거 처리 메서드
 	// 캐럿 관련
-    CPoint GetCaretPixelPos(const TextPos& pos);
-    TextPos GetTextPosFromPoint(CPoint pt);
+    CPoint GetCaretPixelPos(const TextPos& pos); // 캐럿 위치를 픽셀 좌표로 변환
+    TextPos GetTextPosFromPoint(CPoint pt); // 마우스  클릭 위치를 텍스트 위치로 변환
 	void UpdateCaretPosition(); // 캐럿 위치 갱신
 	void EnsureCaretVisible(); // 캐럿이 보이도록 스크롤 조정
 	// 스크롤 관련
@@ -376,6 +385,15 @@ private:
     void InitializeWordDelimiters();        // 구분자 초기화 함수
     bool IsWordDelimiter(wchar_t ch);      // 구분자 확인
     void FindWordBoundary(const std::wstring& text, int position, int& start, int& end);  // 단어 경계 찾기
+    // Undo 관련 헬퍼 함수들
+    void SaveCurrentState(UndoRecord& record);              // 현재 상태를 레코드에 저장
+    void RestoreState(const UndoRecord& record);            // 레코드로부터 상태 복원
+    void AddUndoRecord(const UndoRecord& record);           // Undo 스택에 레코드 추가
+    UndoRecord CreateInsertRecord(const TextPos& pos, const std::wstring& text);
+    UndoRecord CreateDeleteRecord(const TextPos& start, const TextPos& end, const std::wstring& text);
+    UndoRecord CreateReplaceRecord(const TextPos& start, const TextPos& end, const std::wstring& originalText);
+    void DeleteSelectionRange(const TextPos& start, const TextPos& end);
+    void InsertTextAt(const TextPos& pos, const std::wstring& text);
 
     // 내부 데이터
 	Rope m_rope; // 텍스트 데이터를 관리하는 Rope 객체
