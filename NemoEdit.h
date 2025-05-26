@@ -204,6 +204,7 @@ private:
     void UpdateTextMetrics();        // 폰트 변경 시 텍스트 메트릭스 정보 업데이트
     bool CreateTextFormat();         // 텍스트 포맷 객체 생성
     bool CreateBrushes();            // 브러시 객체 생성
+    void SetUnifiedBaseline();      // 베이스라인 75% 강제 설정
 public:
     ID2D1HwndRenderTarget* GetRenderTarget() const { return m_pRenderTarget; }
     void LogRenderTargetState();

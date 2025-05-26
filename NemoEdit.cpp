@@ -4263,6 +4263,7 @@ bool D2Render::Initialize(HWND hwnd) {
 
     // 텍스트 메트릭스 계산
     UpdateTextMetrics();
+    SetUnifiedBaseline();
 
     m_initialized = true;
     return true;
@@ -4367,6 +4368,7 @@ void D2Render::SetFont(std::wstring fontName, int fontSize, bool bold, bool ital
         CreateTextFormat();
         UpdateTextMetrics();
     }
+    SetUnifiedBaseline();
 }
 
 void D2Render::SetFontSize(int fontSize) {
@@ -4375,6 +4377,7 @@ void D2Render::SetFontSize(int fontSize) {
         CreateTextFormat();
         UpdateTextMetrics();
     }
+    SetUnifiedBaseline();
 }
 
 void D2Render::GetFont(std::wstring& fontName, int& fontSize, bool& bold, bool& italic) {
@@ -4391,6 +4394,7 @@ int D2Render::GetFontSize() {
 
 void D2Render::SetSpacing(int spacing) {
     m_spacing = spacing;
+    SetUnifiedBaseline();
 }
 
 void D2Render::SetTextColor(COLORREF textColor) {
@@ -4544,7 +4548,7 @@ void D2Render::FillSolidRect(const D2D1_RECT_F& rect, COLORREF color) {
 }
 
 void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const wchar_t* text, size_t length) {
-    DrawEditText(x, y, clipRect, text, length, false, 0, length - 1);
+    DrawEditText(x, y, clipRect, text, length, false, 0, length-1);
 }
 
 void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const wchar_t* text,
@@ -4570,19 +4574,17 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
 
     // 선택 범위 조정
     if (selected && startSelectPos >= endSelectPos) {
-        // 전체 텍스트 선택 (기존 동작)
+        // 전체 텍스트 선택 (기존 동작) : endSelectPos가 -1인 경우 ( 전체선택으로 들어옴 )
         startSelectPos = 0;
         endSelectPos = static_cast<int>(length);
     }
 
-    // 부분 선택 여부 확인
-    bool isPartialSelection = selected && startSelectPos!= endSelectPos && (startSelectPos > 0 || endSelectPos < static_cast<int>(length));
+    // 부분 선택 여부 확인 : 선택된 부분이 존재하는 경우
+    bool isPartialSelection = selected && startSelectPos != endSelectPos && (startSelectPos > 0 || endSelectPos < static_cast<int>(length));
 
     // 전체 선택이면 기존 동작 사용
     if (selected && !isPartialSelection) {
         // 선택 배경 그리기
-        ID2D1Brush* textBrush = m_pSelectedTextBrush ? m_pSelectedTextBrush : m_pTextBrush;
-
         D2D1_RECT_F textRect = D2D1::RectF(
             x,
             y,
@@ -4613,7 +4615,7 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
         D2D1_RECT_F layoutRect = D2D1::RectF(
             x,
             y,
-            x + static_cast<float>(m_width),
+            x + GetTextWidth(std::wstring(text, length)),
             y + m_textMetrics.lineHeight
         );
 
@@ -4623,7 +4625,7 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
                 static_cast<UINT32>(length),
                 m_pTextFormat,
                 layoutRect,
-                textBrush,
+                m_pTextBrush,
                 D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
             );
         }
@@ -4641,11 +4643,14 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
         // 부분 선택 처리
 
         // 1. 선택 영역 전의 텍스트 그리기
+        std::wstring prePart(text, startSelectPos);
+        float preWidth = GetTextWidth(prePart);
+
         if (startSelectPos > 0) {
             D2D1_RECT_F layoutRect = D2D1::RectF(
                 x,
                 y,
-                x + static_cast<float>(m_width),
+                x + preWidth,
                 y + m_textMetrics.lineHeight
             );
 
@@ -4675,9 +4680,6 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
         }
 
         // 2. 선택된 텍스트 부분 너비 계산
-        std::wstring prePart(text, startSelectPos);
-        float preWidth = GetTextWidth(prePart);
-
         std::wstring selectedPart(&text[startSelectPos], endSelectPos - startSelectPos);
         float selectWidth = GetTextWidth(selectedPart);
 
@@ -4721,7 +4723,7 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
                 static_cast<UINT32>(endSelectPos - startSelectPos),
                 m_pTextFormat,
                 layoutRect,
-                m_pSelectedTextBrush ? m_pSelectedTextBrush : m_pTextBrush,
+                m_pTextBrush,
                 D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
             );
         }
@@ -4734,13 +4736,15 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
         }
 
         // 5. 선택 영역 이후의 텍스트 그리기
+        float nextWidth = GetTextWidth(std::wstring(text, length));
+
         if (endSelectPos < static_cast<int>(length)) {
             float postX = x + preWidth + selectWidth;
 
             D2D1_RECT_F layoutRect = D2D1::RectF(
                 postX,
                 y,
-                postX + static_cast<float>(m_width),
+                postX + nextWidth,
                 y + m_textMetrics.lineHeight
             );
 
@@ -4774,7 +4778,7 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
         D2D1_RECT_F layoutRect = D2D1::RectF(
             x,
             y,
-            x + static_cast<float>(m_width),
+            x + GetTextWidth(std::wstring(text, length)),
             y + m_textMetrics.lineHeight
         );
 
@@ -4816,7 +4820,6 @@ void D2Render::DrawLineText(float x, float y, const D2D1_RECT_F* clipRect, const
         x + 100.0f,  // 넉넉한 너비
         y + m_textMetrics.lineHeight
     );
-    //TRACE(L"layoutRect = (%.1f, %.1f, %.1f, %.1f)\n", layoutRect.left, layoutRect.top, layoutRect.right, layoutRect.bottom);
     if (clipRect) {
         // 클리핑 적용을 위한 레이어 생성
         D2D1_RECT_F clippedRect = *clipRect;
@@ -5057,6 +5060,26 @@ bool D2Render::CreateBrushes() {
     }
 
     return true; // 텍스트 브러시가 생성됨
+}
+
+void D2Render::SetUnifiedBaseline() {
+    if (!m_pTextFormat) return;
+
+    // 통합 베이스라인 계산 (75% 지점)
+    float unifiedLineSpacing = m_textMetrics.lineHeight + m_spacing;
+    float unifiedBaseline = m_textMetrics.lineHeight*0.8f;
+    //float unifiedBaseline = m_textMetrics.lineHeight;
+
+    HRESULT hr = m_pTextFormat->SetLineSpacing(
+        DWRITE_LINE_SPACING_METHOD_UNIFORM,
+        unifiedLineSpacing,
+        unifiedBaseline
+    );
+
+    if (FAILED(hr)) {
+        // 로그 또는 에러 처리
+        OutputDebugStringA("Failed to set unified baseline\n");
+    }
 }
 
 void D2Render::LogRenderTargetState() {
