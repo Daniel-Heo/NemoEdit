@@ -2907,45 +2907,12 @@ void NemoEdit::OnMouseMove(UINT nFlags, CPoint point) {
             }
         }
         else {
-            // 기존 일반 모드 코드 유지 (최소한의 변경)
-            // 라인 번호 영역 처리
-            int numberAreaWidth = 0;
-            if (m_showLineNumbers) {
-                numberAreaWidth = CalculateNumberAreaWidth();
-                if (point.x < numberAreaWidth) point.x = numberAreaWidth;
-            }
+            // 기존 일반 모드 코드를 GetTextPosFromPoint 사용으로 대체
+            TextPos newPos = GetTextPosFromPoint(point);
 
-            // 라인 위치 계산
-            int lineOffset = point.y / m_lineHeight;
-            int newLineIndex = m_scrollYLine + lineOffset;
-            if (newLineIndex < 0) newLineIndex = 0;
-            if (newLineIndex >= (int)m_rope.getSize()) newLineIndex = (int)m_rope.getSize() - 1;
-
-            // 컬럼 위치 계산
-            int newColIndex = 0;
-            if (newLineIndex < m_rope.getSize()) {
-                std::wstring lineText = m_rope.getLine(newLineIndex);
-                int textX = point.x + m_scrollX - numberAreaWidth;
-                if (textX < 0) textX = 0;
-                int low = 0, high = (int)lineText.size();
-                while (low <= high) {
-                    int mid = (low + high) / 2;
-                    CSize sz = GetTextWidth(lineText.substr(0,mid).c_str());
-                    if (sz.cx <= textX) {
-                        newColIndex = mid;
-                        low = mid + 1;
-                    }
-                    else {
-                        high = mid - 1;
-                    }
-                }
-            }
-
-            // 캐럿 위치 업데이트
-            if (newLineIndex != m_caretPos.lineIndex || newColIndex != m_caretPos.column) {
-                TextPos oldCaret = m_caretPos;
-                m_caretPos.lineIndex = newLineIndex;
-                m_caretPos.column = newColIndex;
+            // 캐럿 위치가 변경된 경우에만 업데이트
+            if (newPos.lineIndex != m_caretPos.lineIndex || newPos.column != m_caretPos.column) {
+                m_caretPos = newPos;
 
                 // 선택 영역 업데이트
                 if (m_selectInfo.anchor.lineIndex < m_caretPos.lineIndex ||
