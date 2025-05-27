@@ -364,7 +364,7 @@ private:
 	void ReplaceSelection(std::wstring text);
     int GetTextWidth(const std::wstring& line); // 문자의 길이를 캐싱된 데이터로 계산
     std::vector<int> FindWordWrapPosition(int lineIndex); // 자동 줄바꿈 위치 찾기
-    void SplitTextByNewlines(std::wstring& text, std::vector<std::wstring>& parts); // 텍스트를 줄바꿈 문자로 분리
+    void SplitTextByNewlines(std::wstring& text, std::list<std::wstring>& parts); // 텍스트를 줄바꿈 문자로 분리
     void AddTabToSelectedLines();      // 여러 줄 선택 시 탭 추가 처리 메서드
     void RemoveTabFromSelectedLines(); // 여러 줄 선택 시 탭 제거 처리 메서드
     // 캐럿 관련
