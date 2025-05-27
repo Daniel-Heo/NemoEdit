@@ -211,10 +211,10 @@ public:
 };
 
 struct Margin {
-	int left;
-	int right;
-	int top;
-	int bottom;
+    int left;
+    int right;
+    int top;
+    int bottom;
 };
 
 // IME 관련 구조체
@@ -227,25 +227,33 @@ struct IMECompositionInfo {
 
 // 내부 자료구조와 기능
 struct TextPos {
-	int lineIndex; // 라인 인덱스 (0부터 시작)
-	int column; // 열 인덱스 (0부터 시작)
+    int lineIndex; // 라인 인덱스 (0부터 시작)
+    int column; // 열 인덱스 (0부터 시작)
     TextPos(int li = 0, int col = 0) : lineIndex(li), column(col) {}
 };
 
 struct SelectInfo {
-	bool isSelected; // 선택된 상태인지 여부
-	bool isSelecting = false; // 선택중이거나 선택된 상태인지 여부
+    bool isSelected; // 선택된 상태인지 여부
+    bool isSelecting = false; // 선택중이거나 선택된 상태인지 여부
     TextPos start;
     TextPos end;
-	TextPos anchor;
+    TextPos anchor;
 };
 
 struct ColorInfo {
-	COLORREF text;
-	COLORREF textBg;
-	COLORREF lineNum;
-	COLORREF lineNumBg;
-	COLORREF select;
+    COLORREF text;
+    COLORREF textBg;
+    COLORREF lineNum;
+    COLORREF lineNumBg;
+    COLORREF select;
+};
+
+struct FindReplaceOptions {
+    bool matchCase = false;     // 대소문자 구분
+    bool wholeWord = false;     // 단어 단위 검색
+    bool searchDown = true;     // 검색 방향 (true: 아래로, false: 위로)
+    std::wstring findText;      // 찾을 텍스트
+    std::wstring replaceText;   // 대체할 텍스트
 };
 
 // MFC CWnd 기반 텍스트 에디터 컨트롤 NemoEdit 클래스
@@ -259,19 +267,19 @@ public:
 
     // 설정 메서드
     int GetLineHeight() { return m_lineHeight; }
-	void SetFont(std::wstring fontName, int fontSize, bool bold, bool italic);
+    void SetFont(std::wstring fontName, int fontSize, bool bold, bool italic);
     void GetFont(std::wstring& fontName, int& fontSize, bool& bold, bool& italic);
     void ApplyFont();
     void SetFontSize(int size);
-	int GetFontSize();
+    int GetFontSize();
     void SetTabSize(int size);
     int GetTabSize();
     void SetLineSpacing(int spacing);
     void SetWordWrap(bool enable);
     void ShowLineNumbers(bool show);
-	void SetReadOnly(bool isReadOnly);
-	void SetMargin(int left, int right, int top, int bottom);
-	void SetTextColor(COLORREF textColor, COLORREF bgColor);
+    void SetReadOnly(bool isReadOnly);
+    void SetMargin(int left, int right, int top, int bottom);
+    void SetTextColor(COLORREF textColor, COLORREF bgColor);
     void SetTextColor(COLORREF textColor);
     void SetBgColor(COLORREF textBgColor, COLORREF lineBgColor);
     COLORREF GetTextColor();
@@ -304,6 +312,8 @@ protected:
         // 작업 범위 (모두 작업 전 상태 기준)
         TextPos start;          // 작업 시작 위치 (작업 전)
         TextPos end;            // 작업 끝 위치 (작업 전, Delete/Replace용)
+        TextPos startAfter;   // 작업 시작 위치 (작업 후, Replace용)
+        TextPos endAfter;    // 작업 끝 위치 (작업 후, Replace용)
         std::wstring text;      // Insert: 삽입할 내용, Delete/Replace: 원본 내용
 
         // 선택 영역 복원용 (작업 전 상태)
@@ -353,21 +363,21 @@ private:
 	void DeleteSelection();
 	void ReplaceSelection(std::wstring text);
     int GetTextWidth(const std::wstring& line); // 문자의 길이를 캐싱된 데이터로 계산
-	std::vector<int> FindWordWrapPosition(int lineIndex); // 자동 줄바꿈 위치 찾기
-	void SplitTextByNewlines(const std::wstring& text, std::vector<std::wstring>& parts); // 텍스트를 줄바꿈 문자로 분리
+    std::vector<int> FindWordWrapPosition(int lineIndex); // 자동 줄바꿈 위치 찾기
+    void SplitTextByNewlines(std::wstring& text, std::vector<std::wstring>& parts); // 텍스트를 줄바꿈 문자로 분리
     void AddTabToSelectedLines();      // 여러 줄 선택 시 탭 추가 처리 메서드
     void RemoveTabFromSelectedLines(); // 여러 줄 선택 시 탭 제거 처리 메서드
-	// 캐럿 관련
+    // 캐럿 관련
     CPoint GetCaretPixelPos(const TextPos& pos); // 캐럿 위치를 픽셀 좌표로 변환
     TextPos GetTextPosFromPoint(CPoint pt); // 마우스  클릭 위치를 텍스트 위치로 변환
-	void UpdateCaretPosition(); // 캐럿 위치 갱신
-	void EnsureCaretVisible(); // 캐럿이 보이도록 스크롤 조정
-	// 스크롤 관련
-	void RecalcScrollSizes(); // 스크롤 사이즈 재계산
+    void UpdateCaretPosition(); // 캐럿 위치 갱신
+    void EnsureCaretVisible(); // 캐럿이 보이도록 스크롤 조정
+    // 스크롤 관련
+    void RecalcScrollSizes(); // 스크롤 사이즈 재계산
     void NemoShowScrollBar(UINT nBar, BOOL bShow); // NemoShowScrollBar 래핑 함수
     void NemoSetScrollInfo(UINT nBar, LPSCROLLINFO lpScrollInfo,
-		BOOL bRedraw); // NemoSetScrollInfo 래핑 함수
-	void NemoSetScrollPos(int nBar, int nPos, BOOL bRedraw); // NemoSetScrollPos 래핑 함수
+        BOOL bRedraw); // NemoSetScrollInfo 래핑 함수
+    void NemoSetScrollPos(int nBar, int nPos, BOOL bRedraw); // NemoSetScrollPos 래핑 함수
     // 텍스트 그리기
     //int GetLineWidth(int lineIndex);
     void DrawLineNo(int lineIndex, int yPos);
@@ -375,13 +385,13 @@ private:
     // 이동
     void MoveCaretToPrevWord();  // 이전 단어의 시작으로 이동
     void MoveCaretToNextWord();  // 다음 단어의 시작으로 이동
-	void SaveClipBoard(const std::wstring& text); // 클립보드에 텍스트 저장
-	std::wstring LoadClipText(); // 클립보드에서 텍스트 로드
+    void SaveClipBoard(const std::wstring& text); // 클립보드에 텍스트 저장
+    std::wstring LoadClipText(); // 클립보드에서 텍스트 로드
     void HideIME(); // IME 숨기기
     void ClearText();
     std::wstring ExpandTabs(const std::wstring& text); // \t을 space * tabSize로 치환
     int TabCount(const std::wstring& text, int endPos);
-	void HandleTripleClick(CPoint point); // 트리플 클릭 처리
+    void HandleTripleClick(CPoint point); // 트리플 클릭 처리
     // 단어 경계 검사
     void InitializeWordDelimiters();        // 구분자 초기화 함수
     bool IsWordDelimiter(wchar_t ch);      // 구분자 확인
@@ -392,9 +402,9 @@ private:
     void AddUndoRecord(const UndoRecord& record);           // Undo 스택에 레코드 추가
     UndoRecord CreateInsertRecord(const TextPos& pos, const std::wstring& text);
     UndoRecord CreateDeleteRecord(const TextPos& start, const TextPos& end, const std::wstring& text);
-    UndoRecord CreateReplaceRecord(const TextPos& start, const TextPos& end, const std::wstring& originalText);
+    UndoRecord CreateReplaceRecord(const TextPos& start, const TextPos& end, const TextPos& startAfter, const TextPos& endAfter, const std::wstring& originalText);
     void DeleteSelectionRange(const TextPos& start, const TextPos& end);
-    void InsertTextAt(const TextPos& pos, const std::wstring& text);
+    void InsertTextAt(const TextPos& pos, std::wstring& text);
 
     // 내부 데이터
 	Rope m_rope; // 텍스트 데이터를 관리하는 Rope 객체
@@ -409,22 +419,22 @@ private:
     mutable int m_numberAreaWidth;        // 라인 번호 영역 너비
 
     // 설정 플래그 및 파라미터
-	bool m_isReadOnly;            // 읽기 전용 여부
+    bool m_isReadOnly;            // 읽기 전용 여부
     bool m_wordWrap;              // 자동 줄바꿈 여부
     bool m_showLineNumbers;       // 라인 번호 표시 여부
     int m_wordWrapWidth;           // WordWrap : 한 줄의 최대 너비 (픽셀, 0이면 제한 없음)
     int m_lineSpacing;            // 추가 줄 간격 (픽셀)
     int m_tabSize; // 탭 사이즈 ( space bar width 기준 ) : space width*m_tabSize = 최종 tab width
     int m_maxWidth; // 현재 문서의 라인 최대 사이즈
-	
+
     // 여백
-	Margin       m_margin;              // 여백 : 오른쪽만 구현
+    Margin       m_margin;              // 여백 : 오른쪽만 구현
     // 색상
-	ColorInfo m_colorInfo;         // 색상 정보
+    ColorInfo m_colorInfo;         // 색상 정보
 
     // 폰트와 렌더링 관련
-	int m_lineHeight; // 한 라인의 높이
-	int m_charWidth; // 라인번호 표시 폰트의 문자 폭
+    int m_lineHeight; // 한 라인의 높이
+    int m_charWidth; // 라인번호 표시 폰트의 문자 폭
 
     // 트리플 클릭 관련 변수
     CPoint m_lastClickPos;     // 마지막 클릭 위치
@@ -437,8 +447,8 @@ private:
 
     // 스크롤 상태
     int m_scrollX; // 수평 스크롤 : 픽셀 단위로 스크린에서 제외된 크기 ( 0부터 시작 )
-	int m_scrollYLine; // 수직 스크롤 : 스크린 첫라인 번호 ( 0부터 시작 )
-	int m_scrollYWrapLine; // 수직 스크롤 : 스크린 첫라인 wordwrap 번호 ( 0이면 라인의 시작, 1이면 워드랩 첫줄 )
+    int m_scrollYLine; // 수직 스크롤 : 스크린 첫라인 번호 ( 0부터 시작 )
+    int m_scrollYWrapLine; // 수직 스크롤 : 스크린 첫라인 wordwrap 번호 ( 0이면 라인의 시작, 1이면 워드랩 첫줄 )
 
     // Undo/Redo 스택
     std::vector<UndoRecord> m_undoStack;
