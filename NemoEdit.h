@@ -354,14 +354,14 @@ private:
     int GetLineWidth(int lineIndex);
     int GetMaxWidth(); // lineWidth의 최대값을 리턴한다.
     // 라인번호 표시 관련
-	int CalculateNumberAreaWidth(); // 라인 번호 영역 너비 계산
-	// 텍스트 조작 관련
+    int CalculateNumberAreaWidth(); // 라인 번호 영역 너비 계산
+    // 텍스트 조작 관련
     void InsertChar(wchar_t ch);
     void InsertNewLine();
 	void DeleteChar(bool backspace);
     void CancelSelection();
-	void DeleteSelection();
-	void ReplaceSelection(std::wstring text);
+    void DeleteSelection();
+    void ReplaceSelection(std::wstring text);
     int GetTextWidth(const std::wstring& line); // 문자의 길이를 캐싱된 데이터로 계산
     std::vector<int> FindWordWrapPosition(int lineIndex); // 자동 줄바꿈 위치 찾기
     void SplitTextByNewlines(std::wstring& text, std::list<std::wstring>& parts); // 텍스트를 줄바꿈 문자로 분리
@@ -373,6 +373,7 @@ private:
     void UpdateCaretPosition(); // 캐럿 위치 갱신
     void EnsureCaretVisible(); // 캐럿이 보이도록 스크롤 조정
     // 스크롤 관련
+    void ScrollViewBy(int pageCount, int lineCount);  // 상대적 화면 스크롤 이동
     void RecalcScrollSizes(); // 스크롤 사이즈 재계산
     void NemoShowScrollBar(UINT nBar, BOOL bShow); // NemoShowScrollBar 래핑 함수
     void NemoSetScrollInfo(UINT nBar, LPSCROLLINFO lpScrollInfo,

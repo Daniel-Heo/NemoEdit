@@ -214,6 +214,7 @@ int NemoEdit::CalculateNumberAreaWidth() {
 int NemoEdit::OnCreate(LPCREATESTRUCT lpCreateStruct) {
     if(CWnd::OnCreate(lpCreateStruct) == -1)
         return -1;
+
     return 0;
 }
 
@@ -1660,13 +1661,53 @@ int NemoEdit::GetTextWidth(const std::wstring& line) {
 }
 
 // lineIndex: 라인 인덱스 - 다음줄이 시작되는 column의 위치들이 데이터에 저장
-std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
+std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex) {
     std::vector<int> wrapPos;
 
     std::wstring lineText = m_rope.getLine(lineIndex);
     if (lineText.empty()) return {}; // 빈 줄일 경우 워드랩 필요 없음
 
-    // 한 줄 전체가 들어갈 경우
+    const size_t LARGE_TEXT_THRESHOLD = 2048;
+
+    // 대용량 텍스트 처리 (1024자 이상)
+    if (lineText.length() > LARGE_TEXT_THRESHOLD) {
+        // 처음 200문자 샘플로 화면에 들어갈 수 있는 최대 문자 수 찾기
+        int sampleSize = min(200, (int)lineText.length());
+        std::wstring sampleText = lineText.substr(0, sampleSize);
+
+        int low = 1;
+        int high = sampleSize;
+        int maxCharsInLine = 1;
+
+        while (low <= high) {
+            int mid = (low + high) / 2;
+
+            std::wstring testText = sampleText.substr(0, mid);
+            std::wstring tabTestText = ExpandTabs(testText);
+            int testWidth = GetTextWidth(tabTestText);
+
+            if (testWidth <= m_wordWrapWidth) {
+                maxCharsInLine = mid;
+                low = mid + 1;
+            }
+            else {
+                high = mid - 1;
+            }
+        }
+
+        // 찾은 최대 문자 수에서 5 빼기
+        int charsPerLine = maxCharsInLine - 10;
+        if (charsPerLine < 10) charsPerLine = 10; // 최소 10문자 보장
+
+        // 고정 크기로 분할
+        for (size_t pos = charsPerLine; pos < lineText.length(); pos += charsPerLine) {
+            wrapPos.push_back(min(pos, lineText.length()));
+        }
+
+        return wrapPos;
+    }
+
+    // 기존 로직 (1024자 미만)
     int lineWidth = GetTextWidth(ExpandTabs(lineText));
     if (lineWidth <= m_wordWrapWidth) {
         return {};
@@ -1676,6 +1717,7 @@ std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
     int currWidthSum = 0;
     std::wstring tabText;
     int low, high, result, currWidth, mid, testSize;
+
     while (currentPos < (int)lineText.length()) {
         // 이진 검색으로 현재 위치에서 가장 긴 텍스트 찾기
         low = 1;
@@ -1700,7 +1742,7 @@ std::vector<int> NemoEdit::FindWordWrapPosition(int lineIndex){
             }
         }
 
-		currWidthSum += currWidth;
+        currWidthSum += currWidth;
         currentPos += result;
         wrapPos.push_back(currentPos);
 
@@ -1954,108 +1996,241 @@ void NemoEdit::UpdateCaretPosition() {
 
 // 캐럿이 보이도록 스크롤 조정 : 입력이나 이동이 있을 경우 호출, 캐럿이 보이지 않으면 스크롤 조정
 void NemoEdit::EnsureCaretVisible() {
-    CPoint pt = GetCaretPixelPos(m_caretPos);
-
-    // 화면 표시 영역 크기 계산
     CRect client;
     GetClientRect(&client);
-	if (client.Width() < 0 || client.Height() < 0) return; // 화면이 없을 경우
+    if (client.Width() < 0 || client.Height() < 0) return; // 화면이 없을 경우
+
     int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
     int screenHeight = client.Height() - m_margin.top - m_margin.bottom;
     int visibleLines = screenHeight / m_lineHeight; // 마진을 제외한 화면에 보이는 줄 수 ( top margin만 계산 )
 
     // 워드랩 모드
     if (m_wordWrap) {
-        // 현재 라인의 몇 번째 워드랩 라인인지 계산
-        int wrapLineIndex = 0; // 캐럿 위치가 속한 워드랩 라인 인덱스
-        int startCol = 0; // 현재 워드랩 라인의 시작 컬럼
-        std::vector<int> wrapPositions = FindWordWrapPosition(m_caretPos.lineIndex);
-        for (size_t i = 0; i < wrapPositions.size(); i++) {
-            if (m_caretPos.column < wrapPositions[i]) {
+        m_wordWrapWidth = screenWidth;
+
+        // 현재 캐럿의 워드랩 라인 인덱스 계산
+        std::vector<int> caretWrapPositions = FindWordWrapPosition(m_caretPos.lineIndex);
+        int caretWrapLineIndex = 0; // 캐럿 위치가 속한 워드랩 라인 인덱스
+
+        for (size_t i = 0; i < caretWrapPositions.size(); i++) {
+            if (m_caretPos.column < caretWrapPositions[i]) {
                 break;
             }
-            startCol = wrapPositions[i];
-            wrapLineIndex++;
+            caretWrapLineIndex++;
         }
+
+        // 캐럿의 화면상 위치 계산
+        CPoint pt = GetCaretPixelPos(m_caretPos);
+        int caretScreenLine = pt.y / m_lineHeight;
 
         // 캐럿이 화면 위로 벗어남
-        if (pt.y < 0) {
+        if (caretScreenLine < 0) {
             m_scrollYLine = m_caretPos.lineIndex;
-            m_scrollYWrapLine = wrapLineIndex;
-            pt.y = 0;
+            m_scrollYWrapLine = caretWrapLineIndex;
         }
-        // 캐럿이 화면 아래로 벗어남 : 현재의 캐럿 위치에서 위로 화면 줄수에 맞는 시작점을 구함
-        else if (pt.y + m_lineHeight > screenHeight) {
-            int totalLineCnt = 0;
-            int wrapCnt = 0;
-            totalLineCnt = wrapLineIndex+1;
-            for (int i = m_caretPos.lineIndex-1; i >= 0; i--) {
-                wrapCnt = (int)FindWordWrapPosition(i).size() + 1; // 화면 줄수 + 워드랩 줄수
-                totalLineCnt += wrapCnt;
-                m_scrollYLine = i;
-                m_scrollYWrapLine = 0;
-                if (totalLineCnt >= visibleLines) {
-                    // 초과된 라인 : 전체라인 - 화면라인수
-                    // 마지막 라인의 워드랩 수 : 마지막 라인의 워드랩 라인수 - 초과된 라인수
-                    m_scrollYWrapLine = totalLineCnt - visibleLines;
-                    break;
+        // 캐럿이 화면 아래로 벗어남
+        else if (caretScreenLine >= visibleLines) {
+            // 핵심: m_scrollYWrapLine 정확한 계산
+            if (m_caretPos.lineIndex == m_scrollYLine) {
+                // 같은 물리적 라인 내에서 워드랩 라인 이동
+                // 캐럿이 화면 맨 아래(visibleLines-1)에 오도록 m_scrollYWrapLine 계산
+                int targetScreenLine = visibleLines - 1;
+                m_scrollYWrapLine = caretWrapLineIndex - targetScreenLine;
+
+                // 음수 방지
+                if (m_scrollYWrapLine < 0) {
+                    m_scrollYWrapLine = 0;
                 }
             }
-            pt.y = (visibleLines - 1) * m_lineHeight;
-        }
-        else {
-            // wrapLineIndex 변경 확인
-            wrapLineIndex = FindWordWrapPosition(m_scrollYLine).size();
-			if (m_scrollYWrapLine > wrapLineIndex)
-				m_scrollYWrapLine = wrapLineIndex;
+            else {
+                // 다른 라인으로 이동 - 전체 스크롤 재계산
+                // 캐럿이 화면 맨 아래에 오도록 스크롤 위치 계산  
+                int targetScreenLine = visibleLines - 1;
+                int totalScreenLinesNeeded = 0;
+
+                // 캐럿 라인에서 캐럿 워드랩 라인까지 필요한 화면 라인 수
+                totalScreenLinesNeeded = caretWrapLineIndex + 1;
+
+                if (totalScreenLinesNeeded <= visibleLines) {
+                    // 캐럿 라인 전체가 화면에 들어감
+                    m_scrollYLine = m_caretPos.lineIndex;
+                    m_scrollYWrapLine = max(0, caretWrapLineIndex - targetScreenLine);
+                }
+                else {
+                    // 캐럿 라인이 너무 길어서 일부만 들어감
+                    m_scrollYLine = m_caretPos.lineIndex;
+                    m_scrollYWrapLine = caretWrapLineIndex - targetScreenLine;
+                }
+            }
         }
 
-        // 캐럿이 안보일 경우에 스크롤 재계산 ( 워드랩이라 초과는 계산하지 않는다 )
-		if (pt.x < 0) {
-			m_scrollX = max(0, m_scrollX-pt.x);
-			pt.x = 0;
-		}
-    }
-    // 일반 모드
-    else {
-        int inc;
+        // 스크롤 위치 유효성 검사
+        if (m_scrollYLine >= (int)m_rope.getSize()) {
+            m_scrollYLine = max(0, (int)m_rope.getSize() - 1);
+            m_scrollYWrapLine = 0;
+        }
 
-        // 기존 워드랩 비활성화 모드 (기존 코드 유지)
+        if (m_scrollYLine >= 0 && m_scrollYLine < (int)m_rope.getSize()) {
+            std::vector<int> scrollLineWrapPos = FindWordWrapPosition(m_scrollYLine);
+            int maxWrapLineIndex = (int)scrollLineWrapPos.size();
+            if (m_scrollYWrapLine > maxWrapLineIndex) {
+                m_scrollYWrapLine = maxWrapLineIndex;
+            }
+            if (m_scrollYWrapLine < 0) {
+                m_scrollYWrapLine = 0;
+            }
+        }
+
+        // 수평 스크롤 처리
         if (pt.x < 0) {
             m_scrollX = max(0, m_scrollX + pt.x);
-            pt.x = 0;
+        }
+        else if (pt.x > screenWidth) {
+            m_scrollX += (pt.x - screenWidth);
+        }
+    }
+    else {
+        // 기존 비워드랩 모드 처리
+        CPoint pt = GetCaretPixelPos(m_caretPos);
+        int inc;
+
+        if (pt.x < 0) {
+            m_scrollX = max(0, m_scrollX + pt.x);
         }
         else if (pt.x + m_margin.right > screenWidth) {
             inc = pt.x + m_margin.right - screenWidth;
             m_scrollX += inc;
-            pt.x -= inc;
         }
 
         // pt.y가 client.Height()보다 클 경우 스크롤이 필요함
         if (pt.y < 0) {
             m_scrollYLine = m_caretPos.lineIndex;
-            pt.y = 0;
         }
         else if (pt.y + m_lineHeight >= screenHeight) {
             inc = pt.y + m_lineHeight - screenHeight;
             m_scrollYLine += inc / m_lineHeight + 1;
-            inc = pt.y + m_lineHeight - (int)(screenHeight / m_lineHeight) * m_lineHeight;
-            pt.y -= m_lineHeight;
         }
     }
 
     m_scrollYLine = max(0, m_scrollYLine);
-    pt.x += CalculateNumberAreaWidth() + m_margin.left;
-    pt.y += m_margin.top;
-
     NemoSetScrollPos(SB_HORZ, m_scrollX, TRUE);
     NemoSetScrollPos(SB_VERT, m_scrollYLine, TRUE);
-    ::SetCaretPos(pt.x, pt.y);
-    if (m_caretVisible == false) {
-        ::ShowCaret(m_hWnd);
-        m_caretVisible = true;
-    }
+    UpdateCaretPosition();
     RecalcScrollSizes();
+}
+
+void NemoEdit::ScrollViewBy(int pageCount, int lineCount) {
+    CRect client;
+    GetClientRect(&client);
+    int visibleLines = max(1, (client.Height() - m_margin.top - m_margin.bottom) / m_lineHeight);
+
+    // 총 이동할 라인 수 계산
+    int totalMoveLines = (pageCount * visibleLines) + lineCount;
+
+    // 페이지 이동일 때는 캐럿도 함께 이동
+    bool moveCaretToo = (pageCount != 0);
+
+    if (m_wordWrap) {
+        // === WordWrap 모드 ===
+        int currentLine = m_scrollYLine;
+        int currentWrapLine = m_scrollYWrapLine;
+        int totalLines = (int)m_rope.getSize();
+
+        if (totalMoveLines > 0) {
+            // 아래로 이동
+            for (int i = 0; i < totalMoveLines; i++) {
+                if (currentLine >= totalLines - 1) break;
+
+                std::vector<int> wrapPositions = FindWordWrapPosition(currentLine);
+                int maxWrapLines = (int)wrapPositions.size();
+
+                if (currentWrapLine < maxWrapLines) {
+                    // 같은 물리적 라인의 다음 WordWrap 라인으로
+                    currentWrapLine++;
+                }
+                else {
+                    // 다음 물리적 라인의 첫 WordWrap 라인으로
+                    currentLine++;
+                    currentWrapLine = 0;
+                }
+            }
+        }
+        else if (totalMoveLines < 0) {
+            // 위로 이동
+            int absMoveLines = -totalMoveLines;
+            for (int i = 0; i < absMoveLines; i++) {
+                if (currentLine <= 0 && currentWrapLine <= 0) break;
+
+                if (currentWrapLine > 0) {
+                    // 같은 물리적 라인의 이전 WordWrap 라인으로
+                    currentWrapLine--;
+                }
+                else {
+                    // 이전 물리적 라인의 마지막 WordWrap 라인으로
+                    currentLine--;
+                    if (currentLine >= 0) {
+                        std::vector<int> wrapPositions = FindWordWrapPosition(currentLine);
+                        currentWrapLine = (int)wrapPositions.size();
+                    }
+                }
+            }
+        }
+
+        // 경계값 보정
+        m_scrollYLine = max(0, min(currentLine, totalLines - 1));
+        m_scrollYWrapLine = max(0, currentWrapLine);
+
+        // WordWrap 라인 유효성 검사
+        if (m_scrollYLine < totalLines) {
+            std::vector<int> wrapPositions = FindWordWrapPosition(m_scrollYLine);
+            int maxWrapLines = (int)wrapPositions.size();
+            if (m_scrollYWrapLine > maxWrapLines) {
+                m_scrollYWrapLine = maxWrapLines;
+            }
+        }
+
+        // 페이지 이동시 캐럿도 이동 (WordWrap 모드)
+        if (moveCaretToo) {
+            UpDown(-totalMoveLines);  // 부호 반전: PageUp(음수)→위로, PageDown(양수)→아래로
+        }
+
+    }
+    else {
+        // === 일반 모드 ===
+        m_scrollYLine += totalMoveLines;
+
+        // 경계값 보정
+        if (m_scrollYLine < 0) {
+            m_scrollYLine = 0;
+        }
+        else {
+            int maxScrollLine = GetScrollLimit(SB_VERT);
+            if (m_scrollYLine > maxScrollLine) {
+                m_scrollYLine = maxScrollLine;
+            }
+        }
+
+        // 페이지 이동시 캐럿도 이동 (일반 모드)
+        if (moveCaretToo) {
+            m_caretPos.lineIndex += totalMoveLines;
+
+            // 캐럿 경계값 보정
+            if (m_caretPos.lineIndex < 0) {
+                m_caretPos.lineIndex = 0;
+                m_caretPos.column = 0;
+            }
+            else if (m_caretPos.lineIndex >= (int)m_rope.getSize()) {
+                m_caretPos.lineIndex = (int)m_rope.getSize() - 1;
+                int lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
+                m_caretPos.column = min(m_caretPos.column, lineSize);
+            }
+            else {
+                // 현재 라인에서 컬럼 위치 보정
+                int lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
+                m_caretPos.column = min(m_caretPos.column, lineSize);
+            }
+        }
+    }
 }
 
 // 스크롤바 범위/페이지 크기 재계산
@@ -2652,30 +2827,30 @@ void NemoEdit::OnSize(UINT nType, int cx, int cy) {
 
 // 수직 스크롤 이벤트 처리
 void NemoEdit::OnVScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar) {
-    CRect client;
-    GetClientRect(&client);
-    int visibleLines = client.Height() / m_lineHeight;
-    if(visibleLines < 1) visibleLines = 1;
-
-    int totalLines = GetScrollLimit(SB_VERT) + 1;
-
-    switch(nSBCode) {
-        case SB_LINEUP: m_scrollYLine = max(0, m_scrollYLine - 1); break;
-        case SB_LINEDOWN: m_scrollYLine = min(totalLines - 1, m_scrollYLine + 1); break;
-        case SB_PAGEUP: m_scrollYLine = max(0, m_scrollYLine - visibleLines); break;
-        case SB_PAGEDOWN: m_scrollYLine = min(totalLines - 1, m_scrollYLine + visibleLines); break;
+    switch (nSBCode) {
+        case SB_LINEUP:   ScrollViewBy(0, -1); break;  // 1라인 위로
+        case SB_LINEDOWN: ScrollViewBy(0, 1);  break;  // 1라인 아래로
+        case SB_PAGEUP:   ScrollViewBy(-1, 0); break;  // 1페이지 위로
+        case SB_PAGEDOWN: ScrollViewBy(1, 0);  break;  // 1페이지 아래로
         case SB_THUMBTRACK:
         case SB_THUMBPOSITION: {
             SCROLLINFO si = { 0 };
             si.cbSize = sizeof(SCROLLINFO);
             si.fMask = SIF_TRACKPOS;
-            GetScrollInfo(SB_VERT, &si); // 다른 방법
-			m_scrollYLine = si.nTrackPos;
+            GetScrollInfo(SB_VERT, &si);
+
+            // 직접 위치 설정 (WordWrap 고려)
+            if (m_wordWrap) {
+                m_scrollYLine = si.nTrackPos;
+                m_scrollYWrapLine = 0;  // 썸 드래그시는 라인 시작으로
+            }
+            else {
+                m_scrollYLine = si.nTrackPos;
+            }
         }
         break;
         default: break;
     }
-	if (m_wordWrap) m_scrollYWrapLine = 0;
 
     NemoSetScrollPos(SB_VERT, m_scrollYLine, TRUE);
     UpdateCaretPosition(); // 추가: 스크롤 후 캐럿 위치 업데이트
@@ -2709,19 +2884,13 @@ void NemoEdit::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar) {
 }
 
 // 마우스 휠 스크롤 처리
-BOOL NemoEdit::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt) {
-    int linesToScroll = 3;
-    if(zDelta > 0) {
-        m_scrollYLine = max(0, m_scrollYLine - linesToScroll);
-    } else if(zDelta < 0) {
-		// 스크롤바 사용하지 않을 경우 Wheel Scroll 처리
-        if( m_isUseScrollCtrl && !m_showScrollBars ) m_scrollYLine = m_scrollYLine + linesToScroll;
-		else m_scrollYLine = min(GetScrollLimit(SB_VERT), m_scrollYLine + linesToScroll);
-    }
-    if (m_wordWrap) m_scrollYWrapLine = 0;
+BOOL NemoEdit::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
+{
+    int scrollLines = (zDelta > 0) ? -3 : 3;  // 3라인씩 스크롤
+    ScrollViewBy(0, scrollLines);
 
     NemoSetScrollPos(SB_VERT, m_scrollYLine, TRUE);
-	UpdateCaretPosition();
+    UpdateCaretPosition();
     Invalidate(FALSE);
     return TRUE;
 }
@@ -2949,7 +3118,6 @@ void NemoEdit::OnChar(UINT nChar, UINT nRepCnt, UINT nFlags) {
     if(nChar == '\r' || nChar == '\n' || nChar >= 32) {
         // 일반 문자 입력
         if (m_selectInfo.isSelected) {
-            //DeleteSelection();
             std::wstring tmpStr(1, nChar);
             ReplaceSelection(tmpStr);
         } else InsertChar((wchar_t)nChar);
@@ -3071,36 +3239,14 @@ void NemoEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags) {
         if (!shift && m_selectInfo.isSelected) {
             CancelSelection();
         }
-        CRect client;
-        GetClientRect(&client);
-        int visibleLines = client.Height() / m_lineHeight;
-        if(visibleLines < 1) visibleLines = 1;
-        m_caretPos.lineIndex = max(0, m_caretPos.lineIndex - visibleLines);
-        lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
-        int desiredCol = oldCaret.column;
-        if(m_caretPos.lineIndex < m_rope.getSize() && desiredCol > lineSize) {
-            desiredCol = lineSize;
-        }
-        m_caretPos.column = desiredCol;
-        m_scrollYLine = max(0, m_scrollYLine - visibleLines);
+        ScrollViewBy(-1, 0);  // 1페이지 위로
         break;
     }
     case VK_NEXT: { // Page Down
         if (!shift && m_selectInfo.isSelected) {
             CancelSelection();
         }
-        CRect client;
-        GetClientRect(&client);
-        int visibleLines = client.Height() / m_lineHeight;
-        if(visibleLines < 1) visibleLines = 1;
-        m_caretPos.lineIndex = min((int)m_rope.getSize() - 1, m_caretPos.lineIndex + visibleLines);
-        lineSize = (int)m_rope.getLineSize(m_caretPos.lineIndex);
-        int desiredCol = oldCaret.column;
-        if(m_caretPos.lineIndex < m_rope.getSize() && desiredCol > lineSize) {
-            desiredCol = lineSize;
-        }
-        m_caretPos.column = desiredCol;
-        m_scrollYLine = min(GetScrollLimit(SB_VERT), m_scrollYLine + visibleLines);
+        ScrollViewBy(1, 0);   // 1페이지 아래로
         break;
     }
     case VK_DELETE:
@@ -3136,9 +3282,8 @@ void NemoEdit::OnKeyDown(UINT nChar, UINT nRepCnt, UINT nFlags) {
                 return; // 이벤트 처리 완료
             }
 			else {
-                // TODO : 이거 undo 2번 해야됨. -> 한번으로 조정해야 됨.
-                DeleteSelection();
-                InsertChar(L'\t');
+                std::wstring tmpStr(1, L'\t');
+            	ReplaceSelection(tmpStr);
 			}
         }
         else {
