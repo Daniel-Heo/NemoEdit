@@ -883,7 +883,12 @@ void NemoEdit::Undo() {
         std::list<std::wstring> parts;
         SplitTextByNewlines(record.text, parts);
 
-        TextPos end(record.start.lineIndex + (int)parts.size() - 1, parts.back().length());
+        TextPos end;
+        if (parts.size() == 1) 
+            end = TextPos(record.start.lineIndex + (int)parts.size() - 1, record.start.column+parts.back().length());
+        else 
+            end = TextPos(record.start.lineIndex + (int)parts.size() - 1, parts.back().length());
+        
         DeleteSelectionRange(record.start, end);
 
         redoRecord.start = record.start;
@@ -1641,11 +1646,6 @@ void NemoEdit::ReplaceSelection(std::wstring text) {
             m_caretPos.lineIndex += parts.size() - 1;
             m_caretPos.column = parts.back().length();
         }
-
-        // 선택 영역 업데이트
-        m_selectInfo.start = m_selectInfo.end = m_selectInfo.anchor = m_caretPos;
-        m_selectInfo.isSelected = false;
-        m_selectInfo.isSelecting = false;
     }
 
     AddUndoRecord(record);
@@ -1766,16 +1766,16 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
     if (lineIndex < 0) lineIndex = 0;
     if (lineIndex >= (int)m_rope.getSize()) lineIndex = (int)m_rope.getSize() - 1;
 
-    // 화면 표시 영역 크기 계산
-    CRect client;
-    GetClientRect(&client);
-    int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
-    int screenHeight = client.Height() - m_margin.top - m_margin.bottom;
-    int visibleLines = screenHeight / m_lineHeight; // 마진을 제외한 화면에 보이는 줄 수 ( top margin만 계산 )
-    m_wordWrapWidth = screenWidth;
-
     // 워드랩 모드일 때 다른 계산 방식 사용
     if (m_wordWrap) {
+        // 화면 표시 영역 크기 계산
+        CRect client;
+        GetClientRect(&client);
+        int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
+        int screenHeight = client.Height() - m_margin.top - m_margin.bottom;
+        int visibleLines = screenHeight / m_lineHeight; // 마진을 제외한 화면에 보이는 줄 수 ( top margin만 계산 )
+        m_wordWrapWidth = screenWidth;
+
         // 현재 라인의 몇 번째 워드랩 라인인지 계산
 		int wrapLineIndex = 0; // 캐럿 위치가 속한 워드랩 라인 인덱스
 		int startCol = 0; // 현재 워드랩 라인의 시작 컬럼
@@ -2886,6 +2886,63 @@ void NemoEdit::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar) {
 // 마우스 휠 스크롤 처리
 BOOL NemoEdit::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
 {
+	// 아래로 스크롤할 때 마지막 라인이 화면에 보이는지 체크
+    if (zDelta < 0) { // 아래로 스크롤할 때만 체크
+        CRect client;
+        GetClientRect(&client);
+        int visibleLines = max(1, (client.Height() - m_margin.top - m_margin.bottom) / m_lineHeight);
+        int totalLines = (int)m_rope.getSize();
+
+        if (m_wordWrap) {
+            // 워드랩 모드: 현재 화면에 보이는 마지막 라인 계산
+            int currentLine = m_scrollYLine;
+            int currentWrapLine = m_scrollYWrapLine;
+            int screenLinesUsed = 0;
+
+            // 화면에 표시되는 라인들을 세어가면서 마지막 라인 찾기
+            while (screenLinesUsed < visibleLines && currentLine < totalLines) {
+                std::vector<int> wrapPositions = FindWordWrapPosition(currentLine);
+                int wrapLinesInThisLine = (int)wrapPositions.size() + 1; // 워드랩 라인 수 + 1
+
+                if (currentLine == m_scrollYLine) {
+                    // 첫 번째 라인은 m_scrollYWrapLine부터 시작
+                    int remainingWrapLines = wrapLinesInThisLine - currentWrapLine;
+                    if (screenLinesUsed + remainingWrapLines <= visibleLines) {
+                        screenLinesUsed += remainingWrapLines;
+                        currentLine++;
+                        currentWrapLine = 0;
+                    }
+                    else {
+                        screenLinesUsed = visibleLines; // 화면 가득참
+                        break;
+                    }
+                }
+                else {
+                    if (screenLinesUsed + wrapLinesInThisLine <= visibleLines) {
+                        screenLinesUsed += wrapLinesInThisLine;
+                        currentLine++;
+                    }
+                    else {
+                        screenLinesUsed = visibleLines; // 화면 가득참
+                        break;
+                    }
+                }
+            }
+
+            // 현재 화면에 문서의 마지막 라인이 보이면 스크롤 차단
+            if (currentLine >= totalLines) {
+                return TRUE;
+            }
+        }
+        else {
+            // 비워드랩 모드: 간단한 계산
+            int lastVisibleLine = m_scrollYLine + visibleLines - 1;
+            if (lastVisibleLine >= totalLines - 1) {
+                return TRUE;
+            }
+        }
+    }
+
     int scrollLines = (zDelta > 0) ? -3 : 3;  // 3라인씩 스크롤
     ScrollViewBy(0, scrollLines);
 
@@ -3352,32 +3409,26 @@ BOOL NemoEdit::PreTranslateMessage(MSG* pMsg)
                 return TRUE;
             }
             switch (nChar) {
-            case 'C': case 'X': case 'V': case 'A': case 'Z': case 'Y':
-                if (ctrl) {  // Ctrl + C/X/V/A/Z/Y 처리
-					switch (nChar) {
-					case 'C': Copy(); break;
-					case 'X': Cut(); break;
-					case 'V': Paste(); break;
-					case 'A': {
-						// 모두 선택
-						int lastLineIndex = (int)m_rope.getSize() - 1;
-						int lastLineSize = (int)m_rope.getLineSize(lastLineIndex);
-						m_selectInfo.start = TextPos(0, 0);
-						m_selectInfo.end = TextPos(lastLineIndex, lastLineSize);
-						m_selectInfo.anchor = m_selectInfo.start;
-						m_caretPos = m_selectInfo.end;
-						m_selectInfo.isSelected = true;
-					}
-					break;
-					case 'Z': Undo(); break;
-					case 'Y': Redo(); break;
-					}
-                    EnsureCaretVisible();
-                    Invalidate(FALSE);
-                    return TRUE;
+                case 'C': Copy(); break;
+                case 'X': Cut(); break;
+                case 'V': Paste(); break;
+                case 'A': {
+                    // 모두 선택
+                    int lastLineIndex = (int)m_rope.getSize() - 1;
+                    int lastLineSize = (int)m_rope.getLineSize(lastLineIndex);
+                    m_selectInfo.start = TextPos(0, 0);
+                    m_selectInfo.end = TextPos(lastLineIndex, lastLineSize);
+                    m_selectInfo.anchor = m_selectInfo.start;
+                    m_caretPos = m_selectInfo.end;
+                    m_selectInfo.isSelected = true;
                 }
                 break;
+                case 'Z': Undo(); break;
+                case 'Y': Redo(); break;
             }
+            EnsureCaretVisible();
+            Invalidate(FALSE);
+            return TRUE;
         }
     }
 
