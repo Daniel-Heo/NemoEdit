@@ -2204,7 +2204,7 @@ void NemoEdit::ScrollViewBy(int pageCount, int lineCount) {
             m_scrollYLine = 0;
         }
         else {
-            int maxScrollLine = GetScrollLimit(SB_VERT);
+            int maxScrollLine = m_rope.getSize() - 1;
             if (m_scrollYLine > maxScrollLine) {
                 m_scrollYLine = maxScrollLine;
             }
