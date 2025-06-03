@@ -415,7 +415,8 @@ private:
 	bool m_caretVisible;                      // 캐럿 표시 여부
 	SelectInfo m_selectInfo;                  // 선택 영역 정보
     IMECompositionInfo m_imeComposition; // IME 조합 정보 구조체
-	// numberArea 관련
+    int m_imeWidth;                             // IME 입력을 위한 여유
+    // numberArea 관련
     mutable int m_nextDiffNum; // 다음 재계산될 라인 번호
     mutable int m_numberAreaWidth;        // 라인 번호 영역 너비
 
