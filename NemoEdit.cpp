@@ -377,8 +377,8 @@ void NemoEdit::SetText(const std::wstring& text) {
     m_undoStack.clear();
     m_redoStack.clear();
 
-    UpdateCaretPosition(); // 케럿 초기화 적용
-    RecalcScrollSizes();
+    m_caretPos = TextPos(0, 0);
+    EnsureCaretVisible();
     SetRedraw(TRUE);
     RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     HideIME();
@@ -443,7 +443,6 @@ void NemoEdit::AddText(std::wstring text) {
 
     // 화면 갱신 및 커서 위치 보정
     EnsureCaretVisible();
-    RecalcScrollSizes();
     Invalidate(FALSE);
 }
 
