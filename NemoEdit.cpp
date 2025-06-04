@@ -1984,7 +1984,7 @@ CPoint NemoEdit::GetCaretPixelPos(const TextPos& pos) {
 void NemoEdit::EnsureCaretVisible() {
     CRect client;
     GetClientRect(&client);
-    if (client.Width() < 0 || client.Height() < 0) return; // 화면이 없을 경우
+    if (client.Width() <= 0 || client.Height() <= 0) return; // 화면이 없을 경우
 
     CPoint pt = GetCaretPixelPos(m_caretPos);
     int screenWidth = client.Width() - m_margin.left - m_margin.right - CalculateNumberAreaWidth();
