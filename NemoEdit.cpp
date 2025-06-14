@@ -2012,16 +2012,28 @@ void NemoEdit::EnsureCaretVisible() {
         }
         // 캐럿이 화면 아래로 벗어남
         else if (pt.y+ m_lineHeight >= screenHeight) {
-            // 워드랩 다음 라인이 있을 경우
-            if (m_scrollYWrapLine < FindWordWrapPosition(m_scrollYLine).size()) {
-                m_scrollYWrapLine++;
-            }
-            else {
-                if (m_scrollYLine < m_rope.getSize() - 1) {
-                    m_scrollYLine++;
-                    m_scrollYWrapLine = 0;
+            // 캐럿을 화면 마지막 줄로 두고 거기서 역산
+            int targetLine = m_caretPos.lineIndex;
+            int targetWrapLine = caretWrapLineIndex;
+            int remainingLines = visibleLines - 1; // 캐럿 라인 제외
+
+            while (remainingLines > 0 && (targetLine > 0 || targetWrapLine > 0)) {
+                if (targetWrapLine > 0) {
+                    targetWrapLine--;
+                    remainingLines--;
+                }
+                else {
+                    targetLine--;
+                    if (targetLine >= 0) {
+                        std::vector<int> wrapPos = FindWordWrapPosition(targetLine);
+                        targetWrapLine = (int)wrapPos.size();
+                        remainingLines--;
+                    }
                 }
             }
+
+            m_scrollYLine = targetLine;
+            m_scrollYWrapLine = targetWrapLine;
         }
     }
     else {
@@ -2041,8 +2053,9 @@ void NemoEdit::EnsureCaretVisible() {
             m_scrollYLine = m_caretPos.lineIndex;
         }
         else if (pt.y + m_lineHeight >= screenHeight) {
-            inc = pt.y + m_lineHeight - screenHeight;
-            m_scrollYLine += inc / m_lineHeight + 1;
+            // 캐럿을 화면 마지막 줄로 설정
+            m_scrollYLine = m_caretPos.lineIndex - visibleLines + 1;
+            if (m_scrollYLine < 0) m_scrollYLine = 0;
         }
     }
 
@@ -3346,8 +3359,9 @@ BOOL NemoEdit::PreTranslateMessage(MSG* pMsg)
         if (ctrl) {
             UINT nChar = (UINT)pMsg->wParam;
             if (m_isReadOnly && nChar != 'C') {
-                return TRUE;
+                return CWnd::PreTranslateMessage(pMsg);
             }
+            bool isAct = true;
             switch (nChar) {
                 case 'C': Copy(); break;
                 case 'X': Cut(); break;
@@ -3365,10 +3379,13 @@ BOOL NemoEdit::PreTranslateMessage(MSG* pMsg)
                 break;
                 case 'Z': Undo(); break;
                 case 'Y': Redo(); break;
+                default: isAct = false; break;
             }
-            EnsureCaretVisible();
-            Invalidate(FALSE);
-            return TRUE;
+            if (isAct) {
+                EnsureCaretVisible();
+                Invalidate(FALSE);
+                return TRUE;
+            }
         }
     }
 
