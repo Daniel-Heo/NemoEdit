@@ -1762,7 +1762,7 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
         for (int i = m_scrollYLine; i < lineSize; i++) {
             wrapCols = FindWordWrapPosition(i);
             totalPrevLines += (int)wrapCols.size() + 1;
-            prevY = totalPrevLines * m_lineHeight+m_margin.top;
+            prevY = totalPrevLines * m_lineHeight + m_margin.top - m_lineSpacing/2;
             pos.lineIndex = i;
             if (prevY >= pt.y) {
                 pos.lineIndex = i;
@@ -1804,6 +1804,7 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
 
                 tabText = ExpandTabs(lineText.substr(startCol, mid));
                 testSize = GetTextWidth(tabText);
+                testSize -= GetTextWidth(tabText.substr(tabText.size() - 1, 1)) / 2;
 
                 if (testSize < pointX) {
                     // 더 많은 텍스트를 포함할 수 있음
@@ -1822,31 +1823,51 @@ TextPos NemoEdit::GetTextPosFromPoint(CPoint pt) {
     }
     else {
         // 수직 위치 계산
-        pos.lineIndex = m_scrollYLine + (pt.y + m_margin.top) / m_lineHeight;
+        pos.lineIndex = m_scrollYLine + (pt.y - m_margin.top - m_lineSpacing / 2) / m_lineHeight;
         if (pos.lineIndex < 0) pos.lineIndex = 0;
         else if (pos.lineIndex >= (int)m_rope.getSize()) pos.lineIndex = (int)m_rope.getSize() - 1;
         // 수평 위치 계산
         std::wstring lineText = m_rope.getLine(pos.lineIndex);
+        int col = 0;
+
         if (!lineText.empty()) {
-            // 라인 번호 표시 중이면 여백만큼 좌측으로 이동
-            int x = pt.x;
+            // 마우스 클릭 위치에서 오프셋 계산
+            int targetX = pt.x;
             if (m_showLineNumbers) {
-                x -= CalculateNumberAreaWidth()+m_margin.left;
+                targetX -= CalculateNumberAreaWidth() + m_margin.left;
             }
-            // 가로 스크롤 오프셋 적용
-            x += m_scrollX;
-            // 텍스트 폭 계산
-            int col = 0;
-            CSize extent;
-            for (col = 0; col < (int)lineText.size(); ++col) {
-                std::wstring text = lineText.substr(0, col + 1);
-                text = ExpandTabs(text);
-                extent = GetTextWidth(text.c_str());
-                if (extent.cx > x) break;
+            targetX += m_scrollX; // 가로 스크롤 오프셋 적용
+
+            // 워드랩과 동일한 이진 검색 방식
+            int low = 1;
+            int high = (int)lineText.size();
+            int result = 0;
+            int mid, testSize;
+            std::wstring tabText;
+
+            while (low <= high) {
+                mid = (low + high) / 2;
+                if (mid <= 0) mid = 1; // 보호 코드
+
+                tabText = ExpandTabs(lineText.substr(0, mid));
+                testSize = GetTextWidth(tabText);
+                testSize -= GetTextWidth(tabText.substr(tabText.size() - 1, 1)) / 2;
+
+                if (testSize < targetX) {
+                    result = mid;
+                    low = mid + 1;
+                }
+                else {
+                    high = mid - 1;
+                }
             }
-            pos.column = col;
+
+            col = result;
         }
+
+        pos.column = col;
     }
+
     return TextPos(pos.lineIndex, pos.column);
 }
 
@@ -4560,28 +4581,17 @@ void D2Render::FillSolidRect(const D2D1_RECT_F& rect, COLORREF color) {
 }
 
 void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const wchar_t* text, size_t length) {
-    DrawEditText(x, y, clipRect, text, length, false, 0, length-1);
+    DrawEditText(x, y, clipRect, text, length, false, 0, length - 1);
 }
 
 void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const wchar_t* text,
     size_t length, bool selected, int startSelectPos, int endSelectPos) {
     // 유효성 검사 추가
-    if (!m_initialized || !m_pRenderTarget || !text || length == 0) {
-        return;
-    }
-
-    // 텍스트 포맷 체크
-    if (!m_pTextFormat) {
-        if (!CreateTextFormat()) {
-            return; // 텍스트 포맷 생성 실패
-        }
-    }
+    if(!m_initialized || !m_pRenderTarget || !text || length == 0 || !m_pTextFormat) return;
 
     // 브러시 체크 및 생성
-    if (!m_pTextBrush) {
-        if (!CreateBrushes()) {
-            return; // 브러시 생성 실패
-        }
+    if (!m_pTextBrush || !m_pSelectedBgBrush) {
+        if (!CreateBrushes()) return;
     }
 
     // 선택 범위 조정
@@ -4591,232 +4601,56 @@ void D2Render::DrawEditText(float x, float y, const D2D1_RECT_F* clipRect, const
         endSelectPos = static_cast<int>(length);
     }
 
-    // 부분 선택 여부 확인 : 선택된 부분이 존재하는 경우
-    bool isPartialSelection = selected && startSelectPos != endSelectPos && (startSelectPos > 0 || endSelectPos < static_cast<int>(length));
+    std::wstring str(text, length);
+    std::vector<int> positions = MeasureTextPositions(str);
+    float preX = x + (startSelectPos < positions.size() ? positions[startSelectPos] : 0.0f);
+    float postX = x + (endSelectPos < positions.size() ? positions[endSelectPos] : GetTextWidth(str));
 
-    // 전체 선택이면 기존 동작 사용
-    if (selected && !isPartialSelection) {
-        // 선택 배경 그리기
-        D2D1_RECT_F textRect = D2D1::RectF(
-            x,
-            y,
-            x + GetTextWidth(std::wstring(text, length)),
-            y + m_textMetrics.lineHeight + m_spacing
-        );
-
+    if (selected && startSelectPos != endSelectPos) {
+        D2D1_RECT_F selRect = D2D1::RectF(preX, y- m_spacing / 2, postX, y + m_textMetrics.lineHeight + (m_spacing-m_spacing/2));
         if (clipRect) {
-            // 클리핑 영역과 교차
-            textRect.left = max(textRect.left, clipRect->left);
-            textRect.top = max(textRect.top, clipRect->top);
-            textRect.right = min(textRect.right, clipRect->right);
-            textRect.bottom = min(textRect.bottom, clipRect->bottom);
+            selRect.left = max(selRect.left, clipRect->left);
+            selRect.top = max(selRect.top, clipRect->top - m_spacing / 2);
+            selRect.right = min(selRect.right, clipRect->right);
+            selRect.bottom = min(selRect.bottom, clipRect->bottom);
         }
 
-        if (textRect.right > textRect.left && textRect.bottom > textRect.top) {
-            m_pRenderTarget->FillRectangle(textRect, m_pSelectedBgBrush);
-        }
-
-        // 클리핑 설정
-        bool clippingPushed = false;
-        if (clipRect) {
-            m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
-            clippingPushed = true;
-        }
-
-        // 텍스트 그리기
-        D2D1_RECT_F layoutRect = D2D1::RectF(
-            x,
-            y,
-            x + GetTextWidth(std::wstring(text, length)),
-            y + m_textMetrics.lineHeight
-        );
-
-        try {
-            m_pRenderTarget->DrawText(
-                text,
-                static_cast<UINT32>(length),
-                m_pTextFormat,
-                layoutRect,
-                m_pTextBrush,
-                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
-            );
-        }
-        catch (...) {
-            // 예외 처리
-        }
-
-        // 클리핑 해제
-        if (clippingPushed) {
-            m_pRenderTarget->PopAxisAlignedClip();
+        if (selRect.right > selRect.left && selRect.bottom > selRect.top) {
+            m_pRenderTarget->FillRectangle(selRect, m_pSelectedBgBrush);
         }
     }
-    // 부분 선택
-    else if (isPartialSelection) {
-        // 부분 선택 처리
 
-        // 1. 선택 영역 전의 텍스트 그리기
-        std::wstring prePart(text, startSelectPos);
-        float preWidth = GetTextWidth(prePart);
-
-        if (startSelectPos > 0) {
-            D2D1_RECT_F layoutRect = D2D1::RectF(
-                x,
-                y,
-                x + preWidth,
-                y + m_textMetrics.lineHeight
-            );
-
-            bool clippingPushed = false;
-            if (clipRect) {
-                m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
-                clippingPushed = true;
-            }
-
-            try {
-                m_pRenderTarget->DrawText(
-                    text,
-                    static_cast<UINT32>(startSelectPos),
-                    m_pTextFormat,
-                    layoutRect,
-                    m_pTextBrush,
-                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
-                );
-            }
-            catch (...) {
-                // 예외 처리
-            }
-
-            if (clippingPushed) {
-                m_pRenderTarget->PopAxisAlignedClip();
-            }
-        }
-
-        // 2. 선택된 텍스트 부분 너비 계산
-        std::wstring selectedPart(&text[startSelectPos], endSelectPos - startSelectPos);
-        float selectWidth = GetTextWidth(selectedPart);
-
-        // 3. 선택된 부분의 배경 그리기
-        D2D1_RECT_F selectRect = D2D1::RectF(
-            x + preWidth,
-            y,
-            x + preWidth + selectWidth,
-            y + m_textMetrics.lineHeight + m_spacing
-        );
-
-        if (clipRect) {
-            // 클리핑 영역과 교차
-            selectRect.left = max(selectRect.left, clipRect->left);
-            selectRect.top = max(selectRect.top, clipRect->top);
-            selectRect.right = min(selectRect.right, clipRect->right);
-            selectRect.bottom = min(selectRect.bottom, clipRect->bottom);
-        }
-
-        if (selectRect.right > selectRect.left && selectRect.bottom > selectRect.top) {
-            m_pRenderTarget->FillRectangle(selectRect, m_pSelectedBgBrush);
-        }
-
-        // 4. 선택된 텍스트 그리기
-        D2D1_RECT_F layoutRect = D2D1::RectF(
-            x + preWidth,
-            y,
-            x + preWidth + selectWidth,
-            y + m_textMetrics.lineHeight
-        );
-
-        bool clippingPushed = false;
-        if (clipRect) {
-            m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
-            clippingPushed = true;
-        }
-
-        try {
-            m_pRenderTarget->DrawText(
-                &text[startSelectPos],
-                static_cast<UINT32>(endSelectPos - startSelectPos),
-                m_pTextFormat,
-                layoutRect,
-                m_pTextBrush,
-                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
-            );
-        }
-        catch (...) {
-            // 예외 처리
-        }
-
-        if (clippingPushed) {
-            m_pRenderTarget->PopAxisAlignedClip();
-        }
-
-        // 5. 선택 영역 이후의 텍스트 그리기
-        float nextWidth = GetTextWidth(std::wstring(text, length));
-
-        if (endSelectPos < static_cast<int>(length)) {
-            float postX = x + preWidth + selectWidth;
-
-            D2D1_RECT_F layoutRect = D2D1::RectF(
-                postX,
-                y,
-                postX + nextWidth,
-                y + m_textMetrics.lineHeight
-            );
-
-            clippingPushed = false;
-            if (clipRect) {
-                m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
-                clippingPushed = true;
-            }
-
-            try {
-                m_pRenderTarget->DrawText(
-                    &text[endSelectPos],
-                    static_cast<UINT32>(length - endSelectPos),
-                    m_pTextFormat,
-                    layoutRect,
-                    m_pTextBrush,
-                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
-                );
-            }
-            catch (...) {
-                // 예외 처리
-            }
-
-            if (clippingPushed) {
-                m_pRenderTarget->PopAxisAlignedClip();
-            }
-        }
+    // 클리핑 설정
+    bool clippingPushed = false;
+    if (clipRect) {
+        m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
+        clippingPushed = true;
     }
-    // 선택되지 않은 일반 텍스트 그리기
-    else {
-        D2D1_RECT_F layoutRect = D2D1::RectF(
-            x,
-            y,
-            x + GetTextWidth(std::wstring(text, length)),
-            y + m_textMetrics.lineHeight
+
+    // 텍스트 출력 (한 번에)
+    D2D1_RECT_F layoutRect = D2D1::RectF(
+        x,
+        y,
+        x + GetTextWidth(str),
+        y + m_textMetrics.lineHeight
+    );
+
+    try {
+        m_pRenderTarget->DrawText(
+            text,
+            static_cast<UINT32>(length),
+            m_pTextFormat,
+            layoutRect,
+            m_pTextBrush,
+            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
         );
+    }
+    catch (...) {
+        // 예외 무시
+    }
 
-        bool clippingPushed = false;
-        if (clipRect) {
-            m_pRenderTarget->PushAxisAlignedClip(*clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
-            clippingPushed = true;
-        }
-
-        try {
-            m_pRenderTarget->DrawText(
-                text,
-                static_cast<UINT32>(length),
-                m_pTextFormat,
-                layoutRect,
-                m_pTextBrush,
-                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
-            );
-        }
-        catch (...) {
-            // 예외 처리
-        }
-
-        if (clippingPushed) {
-            m_pRenderTarget->PopAxisAlignedClip();
-        }
+    if (clippingPushed) {
+        m_pRenderTarget->PopAxisAlignedClip();
     }
 }
 
