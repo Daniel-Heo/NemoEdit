@@ -2795,6 +2795,14 @@ void NemoEdit::OnSize(UINT nType, int cx, int cy) {
     }
 
     if (!m_lineHeight) return;
+
+    // wordwrap 모드일 때 너비 재계산
+    if (m_wordWrap) {
+        CRect client;
+        GetClientRect(&client);
+        m_wordWrapWidth = client.Width() - CalculateNumberAreaWidth() - m_margin.right - m_margin.left;
+    }
+
     RecalcScrollSizes(); // 스크롤 크기 재계산
     Invalidate(FALSE);
 }
